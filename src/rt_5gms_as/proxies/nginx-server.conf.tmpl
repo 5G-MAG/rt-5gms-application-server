@@ -1,0 +1,23 @@
+  server {{
+    listen	8080;
+    listen      [::]:8080;
+    server_name {server_names};
+
+    location / {{
+      return 404;
+    }}
+
+    location ~ ^/m4d/provisioning-session-{provision_session}/ {{
+{rewrite_rules}
+      proxy_pass	{downstream_origin};
+    }}
+
+    error_page 404 /404.html;
+    location = /40x.html {{
+    }}
+
+    error_page 500 502 503 504 /50x.html;
+    location = /50x.html {{
+    }}
+  }}
+

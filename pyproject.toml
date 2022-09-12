@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rt-5gms-application-server"
+version = "0.0.1"
+dependencies = [
+    'urllib3 >= 1.25.3',
+    'python-dateutil',
+    'importlib-metadata; python_version >= 3.7',
+]
+scripts = { 5gms-application-server = "rt_5gms_as.app" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
