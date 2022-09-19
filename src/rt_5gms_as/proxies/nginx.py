@@ -9,6 +9,7 @@ reverse proxy.
 import datetime
 import os
 import os.path
+import subprocess
 
 from ..proxy_factory import WebProxyInterface, add_web_proxy
 from ..utils import find_executable_on_path
@@ -134,7 +135,7 @@ class NginxWebProxy(WebProxyInterface):
         if cmd is None:
             return False
         # Only include the command line arguments accepted by the local nginx
-        cmd_line = __check_nginx_flags(cmd,[('-e',self.__error_log_path), ('-c',self.__nginx_conf_path), ('-g','daemon off;')])
+        cmd_line = self.__check_nginx_flags(cmd,[('-e',self.__error_log_path), ('-c',self.__nginx_conf_path), ('-g','daemon off;')])
         return self._startDaemon(cmd_line)
 
     def wait(self):
