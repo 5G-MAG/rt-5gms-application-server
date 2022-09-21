@@ -1,3 +1,8 @@
 *.pyc
 *.pyo
+*.egg-info
+*.dist-info
 __pycache__
+dist
+build
+src/rt_5gms_as/openapi_5g
