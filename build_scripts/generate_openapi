@@ -1,0 +1,49 @@
+#!/bin/sh
+#
+# 5G-MAG Reference Tools: 5GMS Application Server
+# ===============================================
+#
+# File: generate_openapi
+# License: 5G-MAG Public License (v1.0)
+# Author: David Waring
+# Copyright: (C) 2022 British Broadcasting Corporation
+#
+# For full license terms please see the LICENSE file distributed with this
+# program. If this file is missing then the license can be retrieved from
+# https://drive.google.com/file/d/1cinCiA778IErENZ3JN52VFW-1ffHpx7Z/view
+#
+# This will download the openapi-generator JAR, fetch the latest release 17
+# OpenAPI YAML files for 5G and use them to generate python modules for parsing
+# the 5GMS ContentHostingConfiguration JSON from TS 26.512 (M1 interface).
+#
+
+scriptdir=`dirname "$0"`
+scriptdir=`cd "$scriptdir"; pwd`
+
+rt_5gms_as_dir=`cd "${scriptdir}/../src/rt_5gms_as"; pwd`
+
+find_java() {
+    # Use the JAVA environment variable if set else look for "java" command
+    if [ -n "$JAVA" ]; then
+	echo $JAVA
+    else
+	which java
+    fi
+}
+
+if [ ! -d "${rt_5gms_as_dir}/openapi_5g" ]; then
+    mkdir -p "${rt_5gms_as_dir}/openapi_5g"
+    java=`find_java`
+    tmpdir=`mktemp -d --tmpdir openapi-generator.XXXXXXXX`
+    trap "rm -rf '$tmpdir'" 0 1 2 3 4 5 6 7 8 10 11 12 13 14
+    (
+    	cd "$tmpdir"
+     	wget https://repo1.maven.org/maven2/org/openapitools/openapi-generator-cli/6.0.1/openapi-generator-cli-6.0.1.jar -O openapi-generator-cli.jar
+     	git clone -b REL-17 https://forge.3gpp.org/rep/all/5G_APIs.git
+     	mkdir 5g-api-python
+     	"$java" -jar openapi-generator-cli.jar generate -i 5G_APIs/TS26512_M1_ContentHostingProvisioning.yaml -g python --additional-properties packageName=rt_5gms_as.openapi_5g,projectName=openapi-5g -o 5g-api-python
+     	cp -rv 5g-api-python/rt_5gms_as/openapi_5g "$rt_5gms_as_dir/"
+    )
+fi
+
+exit 0

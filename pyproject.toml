@@ -1,17 +1,32 @@
 [build-system]
 requires = ["setuptools"]
-build-backend = "setuptools.build_meta"
+build-backend = "backend"
+backend-path = ["build_scripts"]
 
 [project]
 name = "rt-5gms-application-server"
 version = "0.0.1"
 dependencies = [
     'urllib3 >= 1.25.3',
-    'python-dateutil',
-    'importlib-metadata; python_version >= 3.7',
+    'python-dateutil'
 ]
-scripts = { 5gms-application-server = "rt_5gms_as.app" }
+requires-python = ">=3.7"
+scripts = { 5gms-application-server = "rt_5gms_as.app:main" }
+authors = [
+    { name = 'David Waring', email = 'david.waring2@bbc.co.uk' }
+]
+license = { file = "LICENSE" }
+readme = "README.md"
+
+[project.urls]
+"Homepage" = "https://5g-mag.com/"
+"Source" = "https://github.com/5g-mag/rt-5gms-application-server"
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+"rt_5gms_as.proxies" = ["*.tmpl"]
+
+[tool.setuptools.data-files]
+'docs' = ['docs/*']

@@ -8,6 +8,9 @@ Files in this repository:
 - README.md      - Project README file.
 - LICENSE        - The software license for this project.
 - pyproject.toml - The Python project description for building and installing the application.
+- build_scripts/ - Scripts used when building the python project.
+  - backend.py - build backend wrapper to trigger extra build actions.
+  - generate_openapi - Will generate the OpenAPI python modules if not already present.
 - docs/          - Development documentation and examples.
   - README.md - This document.
   - chc.json - An example ContentHostingConfiguration JSON file which provisions a pull-ingest AS for "Big Buck Bunny".
@@ -22,10 +25,17 @@ Files in this repository:
 
 Running the example without building
 ------------------------------------
-Make sure that nginx is installed on the local system and is found on the
-current command path (`$PATH`).
+Make sure that git, java, wget and nginx are installed on the local system and
+can be found on the current command path (`$PATH`).
 
-Then:
+Generate the OpenAPI python modules (these are not part of the source
+distribution):
+```
+cd rt-5gms-application-server
+build_scripts/generate_openapi
+```
+
+Run the example directly:
 ```
 cd rt-5gms-application-server/src
 python3 -m rt_5gms_as.app ../docs/rt-common-shared/5gms/examples/ContentHostingConfiguration_Big-Buck-Bunny_pull-ingest.json
@@ -35,21 +45,28 @@ This will start nginx with a configuration which will provide a reverse proxy to
 
 Regenerating the 5G API bindings
 --------------------------------
-Download the openapi-generator, e.g.
+The `build_scripts/generate_openapi` script will use wget, git and java to
+download the openapi-generator tool, the 5G OpenAPI YAML and generate the `rt_5gms_as.openapi_5g` Python module package. The script will only do this if the
+`src/rt_5gms_as/openapi_5g` directory does not already exist.
+
+Therefore to regenerate the API bindings you first need to remove the old bindings:
 ```
-wget https://repo1.maven.org/maven2/org/openapitools/openapi-generator-cli/6.0.1/openapi-generator-cli-6.0.1.jar -O openapi-generator-cli.jar
+cd rt-5gms-application-server
+rm -rf src/rt_5gms_as/openapi_5g
 ```
 
-Get a copy of the 5G APIs:
+Then run the generator script:
 ```
-git clone -b REL-17 https://forge.3gpp.org/rep/all/5G_APIs.git
+rt-5gms-application-server/build_scripts/generate_openapi
 ```
 
-Generate the bindings:
-```
-mkdir 5g-api-python
-java -jar openapi-generator-cli.jar generate -i 5G_APIs/TS26512_M1_ContentHostingProvisioning.yaml -g python --additional-properties packageName=rt_5gms_as.openapi_5g,projectName=openapi-5g -o 5g-api-python
-rm -rf rt-5gms-application-server/src/rt_5gms_as/openapi_5g
-mv 5g-api-python/rt_5gms_as/openapi_5g rt-5gms-application-server/src/rt_5gms_as/
-```
+For reference (or if it is desirable to recreate the steps manually) the `generate_openapi` script performs the following actions:
+- Uses `wget` to fetch version 6.0.1 of the [openapi-generator-cli](https://github.com/OpenAPITools/openapi-generator-cli).
+  - e.g. `wget https://repo1.maven.org/maven2/org/openapitools/openapi-generator-cli/6.0.1/openapi-generator-cli-6.0.1.jar -O openapi-generator-cli.jar`
+- Uses `git` to clone the [5G OpenAPI repository](https://forge.3gpp.org/rep/all/5G_APIs.git).
+  - e.g. `git clone -b REL-17 https://forge.3gpp.org/rep/all/5G_APIs.git`
+- Uses the openapi-generator-cli, downloaded in the first step, to generate the API bindings.
+  - e.g. `mkdir 5g-api-python; java -jar openapi-generator-cli.jar generate -i 5G_APIs/TS26512_M1_ContentHostingProvisioning.yaml -g python --additional-properties packageName=rt_5gms_as.openapi_5g,projectName=openapi-5g -o 5g-api-python`
+- Copies the API Python package to the `src/rt_5gms_as/openapi_5g` directory.
+  - e.g. `cp -r 5g-api-python/rt_5gms_as/openapi_5g rt-5gms-application-server/src/rt_5gms_as/`
 
