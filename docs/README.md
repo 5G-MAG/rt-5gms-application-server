@@ -42,7 +42,7 @@ wget https://repo1.maven.org/maven2/org/openapitools/openapi-generator-cli/6.0.1
 
 Get a copy of the 5G APIs:
 ```
-git clone https://forge.3gpp.org/rep/all/5G_APIs.git
+git clone -b REL-17 https://forge.3gpp.org/rep/all/5G_APIs.git
 ```
 
 Generate the bindings:
