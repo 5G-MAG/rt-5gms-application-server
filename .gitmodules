@@ -1,0 +1,4 @@
+[submodule "rt_common_shared"]
+	path = docs/rt-common-shared
+	url = https://github.com/5G-MAG/rt-common-shared.git
+	branch = main
