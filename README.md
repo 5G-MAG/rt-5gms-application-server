@@ -25,16 +25,34 @@ only daemon that can be controlled by the AS is nginx ([website](https://nginx.o
 ## Downloading
 
 _TODO_
+```
+git clone --recurse-submodules https://github.com/5G-MAG/rt-5gms-application-server.git
+```
 
 ## Building
 
 _TODO_
+```
+cd rt-5gms-application-server
+python3 -m build --sdist
+```
 
 ## Installing
 
 _TODO_
+```
+cd rt-5gms-application-server
+pip install -e .
+```
 
 ## Running
 
 _TODO_
+```
+5gms-application-server <ContentHostingConfiguration-JSON-file>
+```
 
+## Development
+
+Please see the [docs/README.md](docs/README.md) file for project development
+and testing information.
