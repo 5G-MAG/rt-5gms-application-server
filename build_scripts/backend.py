@@ -1,3 +1,21 @@
+#!/usr/bin/python3
+#
+# 5G-MAG Reference Tools: 5GMS Application Server
+# ===============================================
+#
+# File: backend.py
+# License: 5G-MAG Public License (v1.0)
+# Author: David Waring
+# Copyright: (C) 2022 British Broadcasting Corporation
+#
+# For full license terms please see the LICENSE file distributed with this
+# program. If this file is missing then the license can be retrieved from
+# https://drive.google.com/file/d/1cinCiA778IErENZ3JN52VFW-1ffHpx7Z/view
+#
+# Build backend wrapper for setuptools.build_meta which checks to see if
+# the generated python files in src/rt_5gms_as/openapi_5g have been generated
+# and creates them if not by running the generate_openapi script.
+#
 import os.path
 import logging
 from setuptools import build_meta as _orig
