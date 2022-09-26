@@ -42,6 +42,7 @@ The selected WebProxyInterface class is held in proxy_factory.WebProxy.
 
 import glob
 import importlib
+import importlib.resources
 import logging
 import os.path
 import subprocess
@@ -221,11 +222,11 @@ class WebProxyInterface(object):
         return self.__daemon['stderr']
 
 # Load all proxy modules from the proxies subdirectory
-proxy_modules_dir = os.path.join(os.path.dirname(__file__), 'proxies')
-for module_path in glob.glob(os.path.join(proxy_modules_dir, '*.py')):
-    module_name = os.path.basename(module_path)[:-3]
-    if module_name != "__init__":
-        importlib.import_module('..proxies.'+module_name, __name__)
+for module_path in importlib.resources.contents(__package__ + '.proxies'):
+    if module_path[-3:] == '.py':
+        module_name = os.path.basename(module_path)[:-3]
+        if module_name != "__init__":
+            importlib.import_module('.proxies.'+module_name, __package__)
 
 # Find the highest priority WebProxyInterface class that indicates its
 # underlying implmentation is available on the runtime system and store in
