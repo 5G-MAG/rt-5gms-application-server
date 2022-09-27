@@ -17,10 +17,88 @@
 # the 5GMS ContentHostingConfiguration JSON from TS 26.512 (M1 interface).
 #
 
+scriptname=`basename "$0"`
 scriptdir=`dirname "$0"`
 scriptdir=`cd "$scriptdir"; pwd`
 
 rt_5gms_as_dir=`cd "${scriptdir}/../src/rt_5gms_as"; pwd`
+
+# Command line defaults
+default_api='TS26512_M1_ContentHostingProvisioning'
+default_branch='REL-17'
+
+ARGS=`getopt -n "$scriptname" -o 'a:b:h' -l 'api:,branch:,help' -s sh -- "$@"`
+
+if [ $? -ne 0 ]; then
+    print_syntax >&2
+    exit 1
+fi
+
+print_syntax() {
+    echo "Syntax: $scriptname [-h] [-b <release-branch>] [-a <API-name>]"
+}
+
+print_help() {
+    cat <<EOF
+Download 5G OpenAPI and generate python bindings
+
+This script will download the 5G APIs and openapi-generator-cli tool and uses
+them to create Python modules which will parse and generate a given API
+structures.
+
+EOF
+    print_syntax
+    cat <<EOF
+
+Options:
+  -h         --help           Show this help message and exit.
+  -a API     --api API        The OpenAPI interface to generate the bindings
+                              from.
+                              [default: $default_api]
+  -b BRANCH  --branch BRANCH  Use the given branch of the 5G_APIs repository.
+                              [default: $default_branch]
+EOF
+}
+
+eval set -- "$ARGS"
+unset ARGS
+
+API="$default_api"
+BRANCH="$default_branch"
+
+while true; do
+    case "$1" in
+    -a|--api)
+	API="$2"
+	shift 2
+	continue
+	;;
+    -b|--branch)
+	BRANCH="$2"
+	shift 2
+	continue
+	;;
+    -h|--help)
+	print_help
+	exit 0
+	;;
+    --)
+	shift
+	break
+	;;
+    *)
+	echo "Error: Command line argument \"$1\" unexpected" >&2
+	print_syntax >&2
+	exit 1
+	;;
+    esac
+done
+
+if [ $# -gt 0 ]; then
+    echo "Error: Command line argument \"$1\" unexpected" >&2
+    print_syntax >&2
+    exit 1
+fi
 
 find_java() {
     # Use the JAVA environment variable if set else look for "java" command
@@ -38,10 +116,21 @@ if [ ! -d "${rt_5gms_as_dir}/openapi_5g" ]; then
     trap "rm -rf '$tmpdir'" 0 1 2 3 4 5 6 7 8 10 11 12 13 14
     (
     	cd "$tmpdir"
-     	wget https://repo1.maven.org/maven2/org/openapitools/openapi-generator-cli/6.0.1/openapi-generator-cli-6.0.1.jar -O openapi-generator-cli.jar
-     	git clone -b REL-17 https://forge.3gpp.org/rep/all/5G_APIs.git
+     	if ! wget https://repo1.maven.org/maven2/org/openapitools/openapi-generator-cli/6.0.1/openapi-generator-cli-6.0.1.jar -O openapi-generator-cli.jar; then
+	    echo "Error: Failed to fetch openapi-generator-cli" >&2
+	    exit 1
+	fi
+     	if ! git clone -b "$BRANCH" https://forge.3gpp.org/rep/all/5G_APIs.git; then
+	    echo "Error: Failed to fetch branch $BRANCH from the 5G_APIs repository" >&2
+	    exit 1
+	fi
+	echo "At commit "`cd 5G_APIs; git log -g --pretty='format:%h %d' --max-count=1 HEAD`
+	if [ ! -e "5G_APIs/${API}.yaml" ]; then
+	    echo "Error: Could not find API, $API, in the 5G_APIs repository" >&2
+	    exit 1
+	fi
      	mkdir 5g-api-python
-     	"$java" -jar openapi-generator-cli.jar generate -i 5G_APIs/TS26512_M1_ContentHostingProvisioning.yaml -g python --additional-properties packageName=rt_5gms_as.openapi_5g,projectName=openapi-5g -o 5g-api-python
+     	"$java" -jar openapi-generator-cli.jar generate -i "5G_APIs/${API}.yaml" -g python --additional-properties packageName=rt_5gms_as.openapi_5g,projectName=openapi-5g -o 5g-api-python
      	cp -rv 5g-api-python/rt_5gms_as/openapi_5g "$rt_5gms_as_dir/"
     )
 fi
