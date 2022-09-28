@@ -24,10 +24,12 @@ reverse proxy.
 '''
 
 import datetime
+import importlib.resources
 import os
 import os.path
+import regex
 import subprocess
-import importlib.resources
+import traceback
 
 from ..proxy_factory import WebProxyInterface, add_web_proxy
 from ..utils import find_executable_on_path
@@ -126,7 +128,7 @@ class NginxWebProxy(WebProxyInterface):
                         if regex is not None:
                             rewrite_rules += '      rewrite "%s" "%s" break;\n'%(regex,replace)
                         else:
-                            self.log.error("Unsafe rewrite rule: %s => %s", rr['request_pattern'], rr['mapped_path'])
+                            self.log.error("Unsafe or invalid rewrite rule: %s => %s", rr['request_pattern'], rr['mapped_path'])
                             return False
                 server_names = dc['canonical_domain_name']
                 if 'domain_name_alias' in dc:
@@ -205,24 +207,47 @@ class NginxWebProxy(WebProxyInterface):
                             args += [value]
         return args
 
-    def __transform_rewrite_rules(self, regex, replace):
+    def __transform_rewrite_rules(self, rule_regex, replace):
         '''Modify the rewrite rule to work in nginx
 
-        Checks the regex for bracketed expressions, apply ECMA regex to nginx
-        regex syntax changes and add a suffix catchall and replace for the
-        basename component of the URL.
+        Checks the regex for bracketed expressions, apply any ECMA regex to
+        nginx (perl) regex syntax changes and add a suffix catchall and replace
+        for the basename component of the URL.
 
         Returns the modified regex and replacement strings.
         '''
-        # For now assume correctness of configuration
-        # TODO:transform from ECMA-262 (v5.1, June 2011) regex standard to regex
-        #      style used by nginx.
-        # TODO:validation checks on the regex.
-        # TODO:work out replace string index to use in case AP using replace
-        #      strings.
-        regex = regex + '(.*)'
-        replace = replace + '$1'
-        return (regex, replace)
+        # Note: ECMA RegExp and Perl regex (as used by nginx) syntax are
+        #       compatible, ECMA appears to be a subset of Perl. Therefore the
+        #       regex shouldn't need any transformation.
+
+        # Python regex uses Perl like syntax so check the regex by compiling in
+        # Python.
+        try:
+            compiled_regex = regex.compile(rule_regex)
+        except regex.error as e:
+            self.log.error("Error in request_pattern: %s", traceback.format_exc())
+            return (None,None)
+
+        # Get number of bracketed expressions for back-references from regex
+        brackets = compiled_regex.groups
+
+        # pathRewriteRule only deals with replacing a path part, so we need to
+        # include the rest of the URL path in the nginx rewrite rule.
+        if rule_regex[0] != '^':
+            rule_regex = '^(.*)' + rule_regex
+            replace = '${1}' + replace
+            brackets += 1
+        if rule_regex[-1] != '$':
+            rule_regex = rule_regex + '([^?#]*/)?'
+            replace = replace + '$%i'%(brackets+1)
+            brackets += 1
+        else:
+            # remove '$' as we need to match entire URL path in nginx
+            rule_regex = rule_regex[:-1]
+        rule_regex = rule_regex + '([^/]*(?:#[^?/]*)?(?:\\?.*)?)$'
+        replace = replace + '$%i'%(brackets+1)
+
+        return (rule_regex, replace)
 
 # Register as a WebProxyInterface class with highest priority
 add_web_proxy(NginxWebProxy,1)
