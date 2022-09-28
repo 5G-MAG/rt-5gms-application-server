@@ -35,13 +35,19 @@ def get_arg_parser():
 
     Syntax:
       rt-5gsm-as -h
-      rt-5gsm-as <config-file>
+      rt-5gsm-as [-c <app-config-file>] <content-config-file>
 
     Options:
-      -h    Show the help text
+      -h         --help           Show the help text
+      -c CONFIG  --config CONFIG  The application configuration file
+
+    Parameters:
+      content-config-file  This the file name of a file containing a
+                           ContentHostingConfiguration in JSON format.
     '''
     parser = argparse.ArgumentParser()
-    parser.add_argument('config', metavar='CHC-JSON-FILE', help='The ContentHostingConfiguration JSON file')
+    parser.add_argument('-c', '--config', nargs=1, required=False, metavar='CONFIG', help='The application configuration file')
+    parser.add_argument('contentconfig', nargs=1, metavar='CHC-JSON-FILE', help='The ContentHostingConfiguration JSON file')
     return parser
 
 def list_join(l, sep1, sep2=None):
@@ -80,7 +86,13 @@ def main():
         log.error("Please install at least one of: %s", list_join([p.name() for p in list_registered_web_proxies()], ', ', ' or '))
         return 1
 
-    context = Context(args.config)
+    config = args.config
+    if config is not None:
+        config = config[0]
+    contentconfig = args.contentconfig
+    if contentconfig is not None:
+        contentconfig = contentconfig[0]
+    context = Context(config, contentconfig)
     proxy = WebProxy(context)
 
     if not proxy.writeConfiguration():
