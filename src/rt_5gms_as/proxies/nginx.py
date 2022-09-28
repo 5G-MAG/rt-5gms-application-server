@@ -27,6 +27,7 @@ import datetime
 import os
 import os.path
 import subprocess
+import importlib.resources
 
 from ..proxy_factory import WebProxyInterface, add_web_proxy
 from ..utils import find_executable_on_path
@@ -42,20 +43,21 @@ class NginxWebProxy(WebProxyInterface):
         Initialise the nginx WebProxyInterface class.
         '''
         super().__init__(context)
+        for directory in [
+            context.getConfigVar('5gms_as.nginx', 'client_body_temp'),
+            context.getConfigVar('5gms_as.nginx', 'proxy_temp'),
+            context.getConfigVar('5gms_as.nginx', 'fastcgi_temp'),
+            context.getConfigVar('5gms_as.nginx', 'uwsgi_temp'),
+            context.getConfigVar('5gms_as.nginx', 'scgi_temp'),
+            os.path.dirname(context.getConfigVar('5gms_as.nginx', 'pid_path', '')),
+            ]:
+            if directory is not None and len(directory) > 0 and not os.path.isdir(directory):
+                os.makedirs(directory)
     
     __nginx = None
     __last_nginx_check = None
 
     # Constants which should be replaced by values from a configuration file
-    __error_log_path    = '/tmp/rt_5gms_as.error.log'
-    __access_log_path   = '/tmp/rt_5gms_as.access.log'
-    __client_body_tmp   = '/tmp/rt_5gms_as.client_body'
-    __proxy_cache_path  = '/tmp/rt_5gms_as.proxy_cache'
-    __proxy_temp_path   = '/tmp/rt_5gms_as.proxy_temp'
-    __fastcgi_temp_path = '/tmp/rt_5gms_as.fastcgi_temp'
-    __uwsgi_temp_path   = '/tmp/rt_5gms_as.uwsgi_temp'
-    __scgi_temp_path   = '/tmp/rt_5gms_as.scgi_temp'
-    __pid_path          = '/tmp/rt_5gms_as.pid'
     #__nginx_conf_path   = '/etc/nginx/rt_5gms_as.conf'
     __nginx_conf_path   = '/tmp/rt_5gms_as.conf'
 
@@ -88,17 +90,25 @@ class NginxWebProxy(WebProxyInterface):
         Return True if it the configuration could be generated and writted to a
                file.
         '''
-        error_log_path = self.__error_log_path
-        access_log_path = self.__access_log_path
-        pid_path = self.__pid_path
-        client_body_tmp = self.__client_body_tmp
-        proxy_cache_path = self.__proxy_cache_path
-        proxy_temp_path = self.__proxy_temp_path
-        fastcgi_temp_path = self.__fastcgi_temp_path
-        uwsgi_temp_path = self.__uwsgi_temp_path
-        scgi_temp_path = self.__scgi_temp_path
+        http_port = self._context.getConfigVar('5gms_as','http_port')
+        https_port = self._context.getConfigVar('5gms_as','https_port')
+        error_log_path = self._context.getConfigVar('5gms_as','error_log')
+        access_log_path = self._context.getConfigVar('5gms_as','access_log')
+        pid_path = self._context.getConfigVar('5gms_as.nginx','pid_path')
+        client_body_tmp = self._context.getConfigVar('5gms_as.nginx','client_body_temp')
+        proxy_cache_path = self._context.getConfigVar('5gms_as','cache_dir')
+        proxy_temp_path = self._context.getConfigVar('5gms_as.nginx','proxy_temp')
+        fastcgi_temp_path = self._context.getConfigVar('5gms_as.nginx','fastcgi_temp')
+        uwsgi_temp_path = self._context.getConfigVar('5gms_as.nginx','uwsgi_temp')
+        scgi_temp_path = self._context.getConfigVar('5gms_as.nginx','scgi_temp')
         # provision session should come from the AF
         provision_session='1234abcd'
+        # Create caching directives if we have a cache dir configured
+        proxy_cache_path_directive = ''
+        proxy_cache_directive = ''
+        if proxy_cache_path is not None and len(proxy_cache_path) > 0:
+            proxy_cache_path_directive = 'proxy_cache_path %s levels=1:2 use_temp_path=on keys_zone=cacheone:10m;'%proxy_cache_path
+            proxy_cache_directive = 'proxy_cache cacheone;'
         # Create the server configurations from the CHCs
         server_configs=''
         for i in self._context.contentHostingConfigurations():
@@ -112,20 +122,25 @@ class NginxWebProxy(WebProxyInterface):
                 rewrite_rules=''
                 if 'path_rewrite_rules' in dc:
                     for rr in dc['path_rewrite_rules']:
-                        rewrite_rules += '      rewrite "%s(.*)" "%s$1" break;\n'%(rr['request_pattern'],rr['mapped_path'])
+                        (regex, replace) = self.__transform_rewrite_rules(rr['request_pattern'],rr['mapped_path'])
+                        if regex is not None:
+                            rewrite_rules += '      rewrite "%s" "%s" break;\n'%(regex,replace)
+                        else:
+                            self.log.error("Unsafe rewrite rule: %s => %s", rr['request_pattern'], rr['mapped_path'])
+                            return False
                 server_names = dc['canonical_domain_name']
                 if 'domain_name_alias' in dc:
                     server_names += ' ' + dc['domain_name_alias']
                 # Use nginx-server.conf.tmpl file as a template for server
                 # configurations.
-                with open(os.path.join(os.path.dirname(__file__),'nginx-server.conf.tmpl')) as template:
+                with importlib.resources.open_text(__package__,'nginx-server.conf.tmpl') as template:
                     for line in template:
                         server_configs += line.format(**locals())
         try:
             # Try to write out the configuration file using nginx.conf.tmpl as
             # a template for the configuration file.
             with open(self.__nginx_conf_path, 'w') as conffile:
-                with open(os.path.join(os.path.dirname(__file__),'nginx.conf.tmpl')) as template:
+                with importlib.resources.open_text(__package__,'nginx.conf.tmpl') as template:
                     for line in template:
                         conffile.write(line.format(**locals()))
         except:
@@ -152,7 +167,7 @@ class NginxWebProxy(WebProxyInterface):
         if cmd is None:
             return False
         # Only include the command line arguments accepted by the local nginx
-        cmd_line = self.__check_nginx_flags(cmd,[('-e',self.__error_log_path), ('-c',self.__nginx_conf_path), ('-g','daemon off;')])
+        cmd_line = self.__check_nginx_flags(cmd,[('-e',self._context.getConfigVar('5gms_as', 'error_log')), ('-c',self.__nginx_conf_path), ('-g','daemon off;')])
         return self._startDaemon(cmd_line)
 
     def wait(self):
@@ -189,6 +204,25 @@ class NginxWebProxy(WebProxyInterface):
                         if value is not None:
                             args += [value]
         return args
+
+    def __transform_rewrite_rules(self, regex, replace):
+        '''Modify the rewrite rule to work in nginx
+
+        Checks the regex for bracketed expressions, apply ECMA regex to nginx
+        regex syntax changes and add a suffix catchall and replace for the
+        basename component of the URL.
+
+        Returns the modified regex and replacement strings.
+        '''
+        # For now assume correctness of configuration
+        # TODO:transform from ECMA-262 (v5.1, June 2011) regex standard to regex
+        #      style used by nginx.
+        # TODO:validation checks on the regex.
+        # TODO:work out replace string index to use in case AP using replace
+        #      strings.
+        regex = regex + '(.*)'
+        replace = replace + '$1'
+        return (regex, replace)
 
 # Register as a WebProxyInterface class with highest priority
 add_web_proxy(NginxWebProxy,1)

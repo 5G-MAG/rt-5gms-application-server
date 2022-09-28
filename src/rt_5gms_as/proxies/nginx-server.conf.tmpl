@@ -1,7 +1,9 @@
   server {{
-    listen	8080;
-    listen      [::]:8080;
+    listen	{http_port};
+    listen      [::]:{http_port};
     server_name {server_names};
+
+    {proxy_cache_directive}
 
     location / {{
       return 404;
