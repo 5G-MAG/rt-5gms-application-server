@@ -8,7 +8,8 @@ name = "rt-5gms-application-server"
 version = "0.0.1"
 dependencies = [
     'urllib3 >= 1.25.3',
-    'python-dateutil'
+    'python-dateutil',
+    'regex >= 2.5.0'
 ]
 requires-python = ">=3.7"
 scripts = { 5gms-application-server = "rt_5gms_as.app:main" }
