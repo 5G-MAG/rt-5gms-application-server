@@ -35,13 +35,36 @@ cd rt-5gms-application-server
 build_scripts/generate_openapi
 ```
 
+Create a configuration to run the application server as a local, unprivileged,
+user.
+```
+mkdir ~/.rt_5gms
+cat > ~/.rt_5gms/application-server.conf <<EOF
+[DEFAULT]
+log_dir = /tmp/rt-5gms-as/logs
+run_dir = /tmp/rt-5gms-as
+
+### 5GMS Application Server specific configurations
+[5gms_as]
+cache_dir = /tmp/rt-5gms-as/cache
+http_port = 8080
+https_port = 8443
+
+### 5GMS Application Server nginx specific configuration
+[5gms_as.nginx]
+root_temp = /tmp/rt-5gms-as
+EOF
+mkdir -p /tmp/rt-5gms-as/cache
+mkdir /tmp/rt-5gms-as/logs
+```
+
 Run the example directly:
 ```
 cd rt-5gms-application-server/src
 python3 -m rt_5gms_as.app ../docs/rt-common-shared/5gms/examples/ContentHostingConfiguration_Big-Buck-Bunny_pull-ingest.json
 ```
 
-This will start nginx with a configuration which will provide a reverse proxy to the Big Buck Bunny DASH media at <http://localhost:8080/m4d/provisioning-session-1234abcd/BigBuckBunny_4s_onDemand_2014_05_09.mpd>.
+This will start nginx with a configuration which will provide a reverse proxy to the Big Buck Bunny DASH media at <http://localhost:8080/m4d/provisioning-session-d54a1fcc-d411-4e32-807b-2c60dbaeaf5f/BigBuckBunny_4s_onDemand_2014_05_09.mpd>.
 
 Regenerating the 5G API bindings
 --------------------------------

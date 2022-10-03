@@ -103,8 +103,9 @@ class NginxWebProxy(WebProxyInterface):
         fastcgi_temp_path = self._context.getConfigVar('5gms_as.nginx','fastcgi_temp')
         uwsgi_temp_path = self._context.getConfigVar('5gms_as.nginx','uwsgi_temp')
         scgi_temp_path = self._context.getConfigVar('5gms_as.nginx','scgi_temp')
-        # provision session should come from the AF
-        provision_session='1234abcd'
+        # provisioning session should come from the AF via M3
+        provisioning_session_id = self._context.getConfigVar('5gms_as','provisioning_session_id')
+        m4d_path_prefix = self._context.getConfigVar('5gms_as','m4d_path_prefix')
         # Create caching directives if we have a cache dir configured
         proxy_cache_path_directive = ''
         proxy_cache_directive = ''
