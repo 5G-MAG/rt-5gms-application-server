@@ -44,6 +44,8 @@ listen_address = ::
 access_log = %(log_dir)s/application-server-access.log
 error_log = %(log_dir)s/application-server-error.log
 pid_path = %(run_dir)s/application-server.pid
+provisioning_session_id = d54a1fcc-d411-4e32-807b-2c60dbaeaf5f
+m4d_path_prefix = /m4d/provisioning-session-%(provisioning_session_id)s/
 
 [5gms_as.nginx]
 root_temp = /var/cache/rt-5gms/as

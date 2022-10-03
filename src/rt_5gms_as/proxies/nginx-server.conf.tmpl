@@ -9,7 +9,7 @@
       return 404;
     }}
 
-    location ~ ^/m4d/provisioning-session-{provision_session}/ {{
+    location ~ ^{m4d_path_prefix} {{
 {rewrite_rules}
       proxy_pass	{downstream_origin};
     }}
