@@ -28,6 +28,7 @@ import importlib.resources
 import os
 import os.path
 import regex
+import signal
 import subprocess
 import traceback
 
@@ -82,7 +83,7 @@ class NginxWebProxy(WebProxyInterface):
         '''
         return "nginx"
 
-    def writeConfiguration(self):
+    async def writeConfiguration(self):
         '''
         Write out the nginx configuration file
 
@@ -150,7 +151,7 @@ class NginxWebProxy(WebProxyInterface):
             raise
         return True
 
-    def tidyConfiguration(self):
+    async def tidyConfiguration(self):
         '''
         Tidy configuration files
 
@@ -159,7 +160,7 @@ class NginxWebProxy(WebProxyInterface):
         os.unlink(self.__nginx_conf_path)
         return True
 
-    def startDaemon(self):
+    async def startDaemon(self):
         '''
         Start the nginx process
 
@@ -171,24 +172,46 @@ class NginxWebProxy(WebProxyInterface):
             return False
         # Only include the command line arguments accepted by the local nginx
         cmd_line = self.__check_nginx_flags(cmd,[('-e',self._context.getConfigVar('5gms_as', 'error_log')), ('-c',self.__nginx_conf_path), ('-g','daemon off;')])
-        return self._startDaemon(cmd_line)
+        return await self._startDaemon(cmd_line)
 
-    def wait(self):
+    async def wait(self):
         '''
         Wait for nginx process to exit
 
         Dumps the stdout and/or stderr from the process after exit.
         '''
-        ret = self._wait()
+        ret = await self._wait()
         if ret:
+            out = self.daemonStdout()
             if self.daemonReturnCode() != 0:
-                self.log.info(self.daemonStdout())
-                self.log.error(self.daemonStderr())
+                if out is not None:
+                    self.log.info(out)
+                err = self.daemonStderr()
+                if err is not None:
+                    self.log.error(self.daemonStderr())
             else:
-                self.log.info(self.daemonStdout())
+                if out is not None:
+                    self.log.info(out)
         else:
-            self.log.error(self.daemonStderr())
+            err = self.daemonStderr()
+            if err is not None:
+                self.log.error(err)
         return ret
+
+    async def reload(self):
+        '''Reload nginx configuration
+
+        This will remove the old config, write out the new config and signal
+        the daemon to reload.
+        '''
+        if self.daemonRunning():
+            if not await self.tidyConfiguration():
+                return False
+            if not await self.writeConfiguration():
+                return False
+            if not await self.signalDaemon(signal.SIGHUP):
+                return False
+        return True
 
     def __check_nginx_flags(self,cmd,flags):
         '''Check if the command will take the command line flags
