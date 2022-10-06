@@ -25,12 +25,14 @@ This module provides a single Context class which holds the context for the
 '''
 
 import configparser
+import io
 import json
 import os
 import os.path
+import sys
 
 from .openapi_5g.model.content_hosting_configuration import ContentHostingConfiguration
-from .openapi_5g.model_utils import deserialize_model
+from .openapi_5g.model_utils import deserialize_model, model_to_dict
 
 DEFAULT_CONFIG = '''[DEFAULT]
 log_dir = /var/log/rt-5gms
@@ -72,23 +74,65 @@ class Context(object):
         config_filename (str)        - filename of the application configuration
         content_hosting_config (str) - filename of the ContentHostingConfiguration JSON
         '''
-        if config_filename is None:
-            config_filename = self.__find_config_file()
-        self.__config = configparser.ConfigParser()
-        self.__config.read_string(DEFAULT_CONFIG)
-        if config_filename is not None:
-            self.__config.read(config_filename)
-        chc = deserialize_model(json.load(open(content_hosting_config, 'r')), ContentHostingConfiguration, config_filename, True, {}, True)
-        self.__chcs = {chc.name: chc}
-        # ensure configured directories exist
-        for directory in [
-            self.__config.get('5gms_as', 'cache_dir'),
-            os.path.dirname(self.__config.get('5gms_as', 'access_log')),
-            os.path.dirname(self.__config.get('5gms_as', 'error_log')),
-            os.path.dirname(self.__config.get('5gms_as', 'pid_path')),
-            ]:
-            if directory is not None and len(directory) > 0 and not os.path.isdir(directory):
-                os.makedirs(directory)
+        self.__config_filename = config_filename
+        self.__content_hosting_config = content_hosting_config
+        self.__loadConfiguration(force=True)
+        self.__loadContentHostingConfiguration(self.__config.get('5gms_as', 'provisioning_session_id'), force=True)
+        self.__web_proxy = None
+        self.__app_log = None
+        self.__app_exit_future = None
+
+    def reload(self):
+        '''Reload the configuration files
+
+        Reloads the configuration files this context was created with.
+
+        Returns True if the configuration has changed or False for no change.
+        '''
+        ret = False
+        if self.__loadConfiguration():
+            ret = True
+        if self.__loadContentHostingConfiguration(self.__config.get('5gms_as', 'provisioning_session_id')):
+            ret = True
+        return ret
+
+    def setWebProxy(self, proxy):
+        '''Set the current active WebProxy object'''
+        self.__web_proxy = proxy
+
+    def webProxy(self):
+        '''Get the current active WebProxy object'''
+        return self.__web_proxy
+
+    def setAppLog(self, log):
+        '''Set the application Logger object'''
+        self.__app_log = log
+
+    def appLog(self):
+        '''Get the application Logger object'''
+        return self.__app_log
+
+    def setAppExitFuture(self, future):
+        '''Set the Future to use to signal application exit and return code'''
+        self.__app_exit_future = future
+
+    def appExitFuture(self):
+        '''Get the application exit Future'''
+        return self.__app_exit_future
+
+    def exitWithReturnCode(self, returncode):
+        '''Exit the application giving the return code provided
+
+        If the application exit Future is set (i.e. the app is in its async
+        event loop) then signal the return code to the Future and return.
+
+        Otherwise this will immediately exit with the return code and this
+        method will not exit.
+        '''
+        if self.__app_exit_future is not None:
+            self.__app_exit_future.set_result(returncode)
+            return None
+        sys.exit(returncode)
 
     def contentHostingConfigurations(self):
         '''Get the list of defined ContentHostingConfiguration objects
@@ -96,7 +140,7 @@ class Context(object):
         Returns a list of the configured ContentHostingConfiguration objects
                 associated with the AS.
         '''
-        return self.__chcs.values()
+        return [p['chc'] for p in self.__provisioning_sessions.values()]
 
     def findContentHostingConfiguration(self, name):
         '''
@@ -105,14 +149,21 @@ class Context(object):
         Return the ContentHostingConfiguration for the given name or None if
         a configuration with that name has not been defined in this context.
         '''
-        if name in self.__chcs:
-            return self.__chcs[name]
+        for chc in self.contentHostingConfigurations():
+            if chc['name'] == name:
+                return chc
         return None
 
     def getConfigVar(self, section, varname, default=None):
         return self.__config.get(section, varname, fallback=default)
 
+    #### Private methods ####
     def __find_config_file(self):
+        '''Find an application configuration file
+
+        Returns the filename of the found application configuration file or
+                None if no configuration file is found.
+        '''
         cfgs = []
         if os.getuid() != 0:
             cfgs += [os.path.expanduser(os.path.join('~', '.rt-5gms', 'application-server.conf'))]
@@ -121,3 +172,80 @@ class Context(object):
             if os.path.exists(cfgfile):
                 return cfgfile
         return None
+
+    def __loadContentHostingConfiguration(self, provisioning_session_id, force=True):
+        '''Load a content hosting configuration
+
+        Loads and replaces a ContentHostingConfiguration if it is different
+        from the previously loaded configuration. If _force_ is True, replace
+        anyway.
+
+        Returns True if the configuration was loaded, False if there was no
+                change.
+        '''
+
+        chc = deserialize_model(json.load(open(self.__content_hosting_config, 'r')), ContentHostingConfiguration, self.__content_hosting_config, True, {}, True)
+        chc_hash = self.__hashOpenAPIObject(chc)
+        if force or provisioning_session_id not in self.__provisioningSessions or chc_hash != self.__provisioning_sessions[provisioning_session_id]['chc_hash']:
+            self.__provisioning_sessions = {provisioning_session_id: {'chc': chc, 'chc_hash': chc_hash}}
+            return True
+        return False
+
+    def __loadConfiguration(self, force=False):
+        '''Load application configuration
+
+        Loads and replaces the application configuration if it is different
+        from the previously loaded configuration. If _force_ is True, replace
+        anyway.
+
+        Returns True if the configuration was loaded, False if there was no
+                change.
+        '''
+        config_filename = self.__configFilename()
+        config = configparser.ConfigParser()
+        config.read_string(DEFAULT_CONFIG)
+        if config_filename is not None:
+            config.read(config_filename)
+        # ensure configured directories exist
+        for directory in [
+            config.get('5gms_as', 'cache_dir'),
+            os.path.dirname(config.get('5gms_as', 'access_log')),
+            os.path.dirname(config.get('5gms_as', 'error_log')),
+            os.path.dirname(config.get('5gms_as', 'pid_path')),
+            ]:
+            if directory is not None and len(directory) > 0 and not os.path.isdir(directory):
+                os.makedirs(directory)
+        # new config loaded, remember it
+        chash = self.__hashConfigParser(config)
+        if force or chash != self.__config_hash:
+            self.__config = config
+            self.__config_hash = chash
+            return True
+        return False
+
+    def __configFilename(self):
+        '''Get the configured application configuration filename
+
+        Returns the configuration file given on the command line or finds
+        a suitable file in the file system.
+
+        Returns the filename or None if no configuration file is found.
+        '''
+        if self.__config_filename is not None:
+            return self.__config_filename
+        return self.__find_config_file()
+
+    @staticmethod
+    def __hashOpenAPIObject(obj):
+        '''Create a consistent hash for an OpenAPI object'''
+        # Just return the hash of the JSON serialization, use sort_keys=True for
+        # consistency
+        return hash(json.dumps(model_to_dict(obj), sort_keys=True))
+
+    @staticmethod
+    def __hashConfigParser(config):
+        '''Create a hash for a ConfigParser object'''
+        sio = io.StringIO()
+        config.write(sio)
+        sio.seek(0)
+        return hash(sio.read())

@@ -23,7 +23,9 @@ Reference Tools: 5GMS Application Server
 This NF provides the configuration interface for an external web proxy daemon.
 '''
 import argparse
+import asyncio
 import logging
+import signal
 import sys
 
 from .proxy_factory import WebProxy, list_registered_web_proxies
@@ -72,46 +74,139 @@ def list_join(l, sep1, sep2=None):
     lstr = [str(v) for v in l]
     return sep1.join(lstr[:-2]+[sep2.join(lstr[-2:])])
 
+def sighup_handler(sig, context):
+    '''Signal Handler for reloading the configuration
+
+    Causes the configuration files to be re-read and if the web proxy
+    configuration has changed, reload (or restart) the web proxy daemon
+    '''
+    context.appLog().info("Reloading configuration...")
+    # reload configuration
+    if context.reload():
+        # configuration changed, reload/restart proxy
+        asyncio.create_task(context.webProxy().reload())
+
+def exit_handler(sig, context):
+    '''Signal handler for INT/QUIT/TERM signals
+
+    This will cause the application to exit by setting an exit code of 0 in
+    the app_exit Future.
+    '''
+    # SIGINT or SIGQUIT is a normal app exit
+    context.appLog().info("Signal %r received, exitting...", sig)
+    context.exitWithReturnCode(0)
+
+async def __app(context):
+    '''Asynchronous app entry point
+
+    This is the main application function which is started as part of an
+    asynchronous event loop after the application configuration has been
+    loaded and checked.
+    '''
+    # Get our running loop
+    loop = asyncio.get_running_loop()
+
+    # Create a Future to be used for app exit, result is the exit code to use
+    app_exit = loop.create_future()
+    context.setAppExitFuture(app_exit)
+
+    # Add signal handlers for HUP (Reload) and INT/QUIT/TERM for app exit
+    loop.add_signal_handler(signal.SIGHUP, sighup_handler, signal.SIGHUP, context)
+    loop.add_signal_handler(signal.SIGINT, exit_handler, signal.SIGINT, context)
+    loop.add_signal_handler(signal.SIGQUIT, exit_handler, signal.SIGQUIT, context)
+
+    # Write out the web proxy configuration
+    if not await context.webProxy().writeConfiguration():
+        context.appLog().error("Unable to write out configurations for %s web proxy", context.webProxy().name())
+        return 1
+
+    # Start the web proxy dameon child process
+    if not await context.webProxy().startDaemon():
+        context.appLog().error("Unable to start %s web proxy", context.webProxy().name())
+        return 1
+
+    # Create a task which will wait for the web proxy daemon to exit
+    wait_task = asyncio.create_task(context.webProxy().wait(), name='Proxy-monitor')
+
+    # TODO: Create HTTP server to handle M2 interface and add task to main loop
+    # TODO: Create HTTP server to handle M3 interface and add task to main loop
+
+    # Main application loop
+    while not app_exit.done():
+        # Wait for one of the background tasks to exit
+        done, pending = await asyncio.wait([app_exit, wait_task], return_when=asyncio.FIRST_COMPLETED)
+        # If it was the web proxy daemon task that finished, handle the daemon
+        # exit by restarting it
+        if wait_task.done():
+            # if the web proxy is restarting too rapidly, abort
+            if context.webProxy().rapidStarts() > 5:
+                context.appLog().error("%s web proxy restarting too quickly, aborting...", context.webProxy().name())
+                app_exit.set_result(1)
+            # if the daemon won't restart, abort
+            elif not await context.webProxy().startDaemon():
+                context.appLog().error("Unable to start %s web proxy", context.webProxy().name())
+                app_exit.set_result(1)
+            # Daemon started ok, start waiting for the new child process to exit
+            else:
+                context.appLog().info("Web proxy process exited, has been restarted")
+                wait_task = asyncio.create_task(context.webProxy().wait(), name='Proxy-monitor')
+
+    # We are exiting, tidy up other tasks
+    if not wait_task.done():
+        wait_task.cancel()
+        await wait_task
+
+    # Stop the web proxy daemon if it's running
+    if not await context.webProxy().stopDaemon():
+        context.appLog().error("Unable to stop %s web proxy", context.webProxy().name())
+        return 1
+
+    # Tidy up the web proxy dameon configuration files
+    if not await context.webProxy().tidyConfiguration():
+        context.appLog().warning("Unable to tidy up after %s web proxy", context.webProxy().name())
+        return 2
+
+    # Return the exit code
+    return app_exit.result()
+
 def main():
     '''
     Application entry point
     '''
+    # Set default logging level
     logging.basicConfig(level=logging.INFO)
 
+    # Parse command line options
     parser = get_arg_parser()
     args = parser.parse_args()
+
+    # Create a logger instance
     log = logging.getLogger("rt-5gms-as")
 
+    # Check that we found a suitable web proxy daemon to use
     if WebProxy is None:
         log.error("Please install at least one of: %s", list_join([p.name() for p in list_registered_web_proxies()], ', ', ' or '))
         return 1
 
+    # Get the application configuration file name
     config = args.config
     if config is not None:
         config = config[0]
+
+    # Get the ContentHostingConfiguration file name
     contentconfig = args.contentconfig
     if contentconfig is not None:
         contentconfig = contentconfig[0]
+
+    # Create the application context
     context = Context(config, contentconfig)
-    proxy = WebProxy(context)
+    context.setAppLog(log)
 
-    if not proxy.writeConfiguration():
-        log.error("Unable to write out configurations for %s web proxy", proxy.name())
-        return 1
+    # Create the web proxy daemon handler
+    context.setWebProxy(WebProxy(context))
 
-    if not proxy.startDaemon():
-        log.error("Unable to start %s web proxy", proxy.name())
-        return 1
-
-    if not proxy.wait():
-        log.error("%s web proxy is not running", proxy.name())
-        return 1
-
-    if not proxy.tidyConfiguration():
-        log.warning("Unable to tidy up after %s web proxy", proxy.name())
-        return 2
-
-    return 0
+    # Now start the asynchronous operation of this application
+    return asyncio.run(__app(context))
 
 if __name__ == "__main__":
     sys.exit(main())

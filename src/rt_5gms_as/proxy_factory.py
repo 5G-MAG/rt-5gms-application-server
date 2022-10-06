@@ -40,12 +40,14 @@ isPresent() call.
 The selected WebProxyInterface class is held in proxy_factory.WebProxy.
 '''
 
+import asyncio
+import asyncio.subprocess
 import glob
 import importlib
 import importlib.resources
 import logging
 import os.path
-import subprocess
+import time
 
 __web_proxies = []
 
@@ -68,8 +70,18 @@ class WebProxyInterface(object):
     Base class for web proxy classes
     '''
     def __init__(self, context):
+        '''WebProxyInterface constructor
+
+        Takes an app context object which will be accessible to child classes
+        via the _context member variable.
+
+        Initialises daemon state management.
+        '''
         self._context = context
-        self.__daemon = {'proc': None, 'returncode': None, 'stdout': None, 'stderr': None}
+        self.__daemon = {'proc': None, 'returncode': None, 'stdout': None, 'stderr': None, 'start_times': []}
+        # Remember restart times within the last 10 seconds in
+        # __daemon['start_times']
+        self.__rapidRestartSecs = 10.0
         self.log = logging.getLogger(self.__class__.__name__)
 
     @classmethod
@@ -92,7 +104,7 @@ class WebProxyInterface(object):
         '''
         return None
 
-    def writeConfiguration(self):
+    async def writeConfiguration(self):
         '''
         Write out the configuration files for the web proxy.
 
@@ -102,7 +114,7 @@ class WebProxyInterface(object):
         '''
         return False
 
-    def startDaemon(self):
+    async def startDaemon(self):
         '''
         Start the web proxy process
 
@@ -119,15 +131,18 @@ class WebProxyInterface(object):
         '''
         return False
 
-    def wait(self):
-        '''
-        Wait for the daemon process started by startDaemon() to exit.
-        '''
-        return self._wait()
+    async def wait(self):
+        '''Wait for the daemon process started by startDaemon() to exit.
 
-    def tidyConfiguration(self):
+        Will wait for the daemon process to exit.
+
+        Returns True of the daemon child process exits, or False if the wait()
+        was cancelled.
         '''
-        Tidy up the configuration files
+        return await self._wait()
+
+    async def tidyConfiguration(self):
+        '''Tidy up the configuration files
 
         This must be implemented by classes inheriting WebProxyInterface.
 
@@ -135,66 +150,15 @@ class WebProxyInterface(object):
         '''
         return False
 
-    def stopDaemon(self):
-        '''
-        Stop a running daemon process
+    async def stopDaemon(self):
+        '''Stop a running daemon process
 
         Return True if the daemon process was stopped successfully
         '''
         if self.__daemon['proc'] is not None:
             self.__daemon['proc'].terminate()
-            self._wait()
+            await self._wait()
             self.__daemon['proc'] = None
-        return True
-
-    def _startDaemon(self, cmd, restart=True):
-        '''
-        Internal method to start a daemon
-
-        Will try to start the command in _cmd_ and store the running subprocess
-        Popen object.
-
-        If _restart_ is True (the default) then a daemon process that is
-        already running is stopped first before the new _cmd_ is started. If
-        _restart_ is False then this will return True if a daemon is already
-        running without starting the new _cmd_, even if it was started with a
-        different command line.
-
-        Return True if the process was started or False is starting the
-        subprocess failed.
-        '''
-        if self.__daemon['proc'] is not None:
-            if restart:
-                self.stopDaemon()
-            else:
-                return True
-        self.__daemon['proc'] = subprocess.Popen(cmd, stdin=None, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        return self.__daemon['proc'] is not None
-
-    def _wait(self, timeout=None):
-        '''
-        Internal method to wait for the daemon process to exit
-
-        Will wait up to _timeout_ seconds for the daemon process to exit. Will
-        wait forever if timeout is None (or not given). If _timeout_ is 0 then
-        will immediately exit with the current running status of the daemon
-        process.
-
-        On exit the return code, stdout and stderr will be available via the
-        daemonReturnCode(), daemonStdout() and daemonStderr() methods.
-
-        Returns True if no daemon process is running or the process exitted
-                within the _timeout_ or returns False if the process did not
-                exit within the _timeout_ period.
-        '''
-        if self.__daemon['proc'] is None:
-            return True
-        try:
-            self.__daemon['returncode'] = self.__daemon['proc'].wait(timeout)
-            self.__daemon['stdout'] = self.__daemon['proc'].stdout.read().decode('utf-8')
-            self.__daemon['stderr'] = self.__daemon['proc'].stderr.read().decode('utf-8')
-        except subprocess.TimeoutExpired as e:
-            return False
         return True
 
     def daemonReturnCode(self):
@@ -220,6 +184,160 @@ class WebProxyInterface(object):
         from this method.
         '''
         return self.__daemon['stderr']
+
+    def daemonRunning(self):
+        '''Return the daemon process running status.
+
+        Return True if the dameon is running, or False if not.
+        '''
+        return self.__daemon['proc'] is not None
+
+    async def signalDaemon(self, sig):
+        '''Send a signal to the daemon process
+
+        Return True if the signal was sent or False if not.
+        '''
+        if self.__daemon['proc'] is not None:
+            self.__daemon['proc'].send_signal(sig)
+            return True
+        return False
+
+    def rapidStarts(self):
+        '''Return the number of times the daemon has started recently
+
+        This will return the number of times the daemon has been started
+        in the last 10 seconds.
+        '''
+        self.__trimDaemonStartTimes()
+        return len(self.__daemon['start_times'])
+
+    async def reload(self):
+        '''Reload after context changes
+
+        Regenerate configuration and reload/restart the proxy process.
+
+        The basic method will stop the old proxy, remove old configuration,
+        write configuration and start the proxy again if it was already running.
+
+        This should be overridden by WebProxyInterface implementations to
+        provide a better reload procedure.
+
+        Return True if the reload was successful or False if there was a
+               problem.
+        '''
+        if self.daemonRunning():
+            if not await self.stopDaemon():
+                return False
+            if not await self.tidyConfiguration():
+                return False
+            if not await self.writeConfiguration():
+                return False
+            if not await self.startDaemon():
+                return False
+        return True
+
+    #### Protected methods ####
+
+    async def _startDaemon(self, cmd, restart=True):
+        '''
+        Internal method to start a daemon
+
+        Will try to start the command in _cmd_ and store the running subprocess
+        Popen object.
+
+        If _restart_ is True (the default) then a daemon process that is
+        already running is stopped first before the new _cmd_ is started. If
+        _restart_ is False then this will return True if a daemon is already
+        running without starting the new _cmd_, even if it was started with a
+        different command line.
+
+        Return True if the process was started or False is starting the
+        subprocess failed.
+        '''
+        if self.__daemon['proc'] is not None:
+            if restart:
+                await self.stopDaemon()
+            else:
+                return True
+        self.__daemon['proc'] = await asyncio.create_subprocess_exec(*cmd, stdin=None, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+        self.__addDaemonStartTime()
+        return self.__daemon['proc'] is not None
+
+    async def _wait(self, timeout=None):
+        '''
+        Internal method to wait for the daemon process to exit
+
+        Will wait up to _timeout_ seconds for the daemon process to exit. Will
+        wait forever if timeout is None (or not given). If _timeout_ is 0 then
+        will immediately exit with the current running status of the daemon
+        process (False for still running and True for exited).
+
+        When this coroutine returns True (i.e. the daemon has exited) the
+        return code, stdout and stderr will be available via the
+        daemonReturnCode(), daemonStdout() and daemonStderr() methods.
+
+        Returns True if no daemon process is running or the process exitted
+                within the _timeout_, or returns False if the process did not
+                exit within the _timeout_ period or this coroutine was
+                cancelled.
+        '''
+        task_name = 'None'
+        task = asyncio.current_task()
+        if task is not None:
+            task_name = task.get_name()
+        self.log.debug("WebProxy._wait() called from Task %s", task_name)
+        if self.__daemon['proc'] is None:
+            return True
+        try:
+            comm_task = asyncio.create_task(self.__daemon['proc'].communicate(), name='wait-for-web-proxy-daemon')
+            await asyncio.wait({comm_task}, timeout=timeout)
+            self.__daemon['returncode'] = self.__daemon['proc'].returncode
+            (stdout, stderr) = comm_task.result()
+            self.__daemon['stdout'] = stdout.decode('utf-8')
+            self.__daemon['stderr'] = stderr.decode('utf-8')
+            self.__daemon['proc'] = None
+        except asyncio.TimeoutError as e:
+            self.log.debug("WebProxy._wait() in Task %s timed out", task_name)
+            return False
+        except asyncio.CancelledError as e:
+            # We've been cancelled, so cancel the sub-task
+            try:
+                comm_task.cancel()
+                await comm_task
+            except asyncio.CancelledError as e:
+                # This exception is expected due to the "comm_task.cancel()"
+                # above
+                pass
+            self.log.debug("WebProxy._wait() in Task %s cancelled", task_name)
+            return False
+        self.log.debug("WebProxy._wait() in Task %s finished", task_name)
+        return True
+
+    #### Private methods ####
+
+    def __trimDaemonStartTimes(self, now=None):
+        '''Remove old entries from the list of daemon start times
+
+        Drops entries from the list of daemon start times if they more than
+        __rapidRestartSecs seconds old.
+        '''
+        if now is None:
+            now = time.monotonic_ns()
+        cutoff = now - (self.__rapidRestartSecs * 1000000000)
+        self.__daemon['start_times'] = [t for t in self.__daemon['start_times'] if t > cutoff]
+
+    def __addDaemonStartTime(self):
+        '''Add a new daemon start time to the list of recent daemon start times
+
+        This wil tidy old entries from the current list and add a new entry.
+        This uses the system monotonic clock.
+        '''
+        now = time.monotonic_ns()
+        self.__trimDaemonStartTimes(now)
+        self.__daemon['start_times'] += [now]
+
+
+
 
 # Load all proxy modules from the proxies subdirectory
 for module_path in importlib.resources.contents(__package__ + '.proxies'):
