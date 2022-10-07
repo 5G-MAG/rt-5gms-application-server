@@ -3,7 +3,7 @@
 # 5G-MAG Reference Tools: 5GMS Application Server
 # ===============================================
 #
-# File: generate_openapi
+# File: generate_5gms_as_openapi
 # License: 5G-MAG Public License (v1.0)
 # Author: David Waring
 # Copyright: (C) 2022 British Broadcasting Corporation
@@ -12,9 +12,9 @@
 # program. If this file is missing then the license can be retrieved from
 # https://drive.google.com/file/d/1cinCiA778IErENZ3JN52VFW-1ffHpx7Z/view
 #
-# This will download the openapi-generator JAR, fetch the latest release 17
-# OpenAPI YAML files for 5G and use them to generate python modules for parsing
-# the 5GMS ContentHostingConfiguration JSON from TS 26.512 (M1 interface).
+# This will use the common script from the rt-common-shared respository
+# (5gms/scripts/generate_openapi) to generate the python OpenAPI bindings for
+# the 5G APIs. 
 #
 
 scriptname=`basename "$0"`
@@ -22,6 +22,7 @@ scriptdir=`dirname "$0"`
 scriptdir=`cd "$scriptdir"; pwd`
 
 rt_5gms_as_dir=`cd "${scriptdir}/../src/rt_5gms_as"; pwd`
+common_scripts_dir=`cd "${scriptdir}/../external/rt-common-shared/5gms/scripts"; pwd`
 
 # Command line defaults
 default_api='TS26512_M1_ContentHostingProvisioning'
@@ -100,39 +101,12 @@ if [ $# -gt 0 ]; then
     exit 1
 fi
 
-find_java() {
-    # Use the JAVA environment variable if set else look for "java" command
-    if [ -n "$JAVA" ]; then
-	echo $JAVA
-    else
-	which java
-    fi
-}
-
 if [ ! -d "${rt_5gms_as_dir}/openapi_5g" ]; then
     mkdir -p "${rt_5gms_as_dir}/openapi_5g"
-    java=`find_java`
-    tmpdir=`mktemp -d --tmpdir openapi-generator.XXXXXXXX`
+    tmpdir=`mktemp -d --tmpdir openapi-5gms-as-generator.XXXXXXXX`
     trap "rm -rf '$tmpdir'" 0 1 2 3 4 5 6 7 8 10 11 12 13 14
-    (
-    	cd "$tmpdir"
-     	if ! wget https://repo1.maven.org/maven2/org/openapitools/openapi-generator-cli/6.0.1/openapi-generator-cli-6.0.1.jar -O openapi-generator-cli.jar; then
-	    echo "Error: Failed to fetch openapi-generator-cli" >&2
-	    exit 1
-	fi
-     	if ! git clone -b "$BRANCH" https://forge.3gpp.org/rep/all/5G_APIs.git; then
-	    echo "Error: Failed to fetch branch $BRANCH from the 5G_APIs repository" >&2
-	    exit 1
-	fi
-	echo "At commit "`cd 5G_APIs; git log -g --pretty='format:%h %d' --max-count=1 HEAD`
-	if [ ! -e "5G_APIs/${API}.yaml" ]; then
-	    echo "Error: Could not find API, $API, in the 5G_APIs repository" >&2
-	    exit 1
-	fi
-     	mkdir 5g-api-python
-     	"$java" -jar openapi-generator-cli.jar generate -i "5G_APIs/${API}.yaml" -g python --additional-properties packageName=rt_5gms_as.openapi_5g,projectName=openapi-5g -o 5g-api-python
-     	cp -rv 5g-api-python/rt_5gms_as/openapi_5g "$rt_5gms_as_dir/"
-    )
+    "$common_scripts_dir/generate_openapi" -a "$API" -b "$BRANCH" -l python:packageName=rt_5gms_as.openapi_5g,projectName=openapi-5g -d "$tmpdir"
+    cp -rv "$tmpdir/rt_5gms_as/openapi_5g" "$rt_5gms_as_dir/"
 fi
 
 exit 0
