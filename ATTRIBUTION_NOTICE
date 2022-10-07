@@ -1,0 +1,21 @@
+5G-MAG RT 5GMS Application Server uses the following open source software:
+
+- python - Python Interpreter v3.7 and later
+  available at https://www.python.org/downloads/
+  Licensed under PSF License Agreement (https://docs.python.org/3/license.html#psf-license)
+
+- regex - Python regex module
+  available at https://pypi.org/project/regex/
+  Licensed under Apache Software License v2.0 terms (https://www.apache.org/licenses/LICENSE-2.0)
+
+- urllib3 - Python urllib3 module
+  available at https://pypi.org/project/urllib3/
+  Licensed under MIT License terms (https://github.com/urllib3/urllib3/blob/main/LICENSE.txt)
+
+- openapi-generator - OpenAPI to code generator
+  available at https://github.com/OpenAPITools/openapi-generator
+  Licensed under Apache Software License v2.0 terms (https://www.apache.org/licenses/LICENSE-2.0)
+
+- nginx - HTTP server and proxy
+  available from https://nginx.org/
+  Licensed under Nginx, Inc. terms (https://trac.nginx.org/nginx/browser/nginx/docs/text/LICENSE)

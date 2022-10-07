@@ -1,7 +1,7 @@
 # 5G-MAG Reference Tools: 5GMS Application Server
 
-This repository holds the 5GMS Application Server implementation for the
-5G-MAG Reference Tools.
+This repository holds the 5GMS Application Server implementation for the 5G-MAG
+Reference Tools.
 
 ## Introduction
 
@@ -12,10 +12,11 @@ This implementation is comprised of a small Python daemon process which
 implements the 5GMS M3 interface as a simple configuration file that is shared
 with the Reference Tools [5GMS AF](https://github.com/5G-MAG/rt-5gms-application-function).
 
-The web server or reverse proxy functionality is provided by an external daemon.
-This 5GMS AS manages the external daemon by dynamically writing its
+The web server or reverse proxy functionality is provided by an external
+daemon. This 5GMS AS manages the external daemon by dynamically writing its
 configuration files and managing the daemon process lifecycle. At present the
-only daemon that can be controlled by the AS is nginx ([website](https://nginx.org/)).
+only daemon that can be controlled by the AS is nginx
+([website](https://nginx.org/)).
 
 ## Specifications
 
@@ -24,32 +25,49 @@ only daemon that can be controlled by the AS is nginx ([website](https://nginx.o
 
 ## Downloading
 
-_TODO_
+Release sdist tar files can be downloaded from _TBC_.
+
+The source can be obtained by cloning the github repository.
 ```
 git clone --recurse-submodules https://github.com/5G-MAG/rt-5gms-application-server.git
 ```
 
-## Building
+## Building a Python distribution
 
-_TODO_
+To build a Python sdist distribution tar do the following.
 ```
+git clone --recurse-submodules https://github.com/5G-MAG/rt-5gms-application-server.git
 cd rt-5gms-application-server
 python3 -m build --sdist
 ```
+The distribution sdist tar file can then be found in the `dist` subdirectory.
 
 ## Installing
 
-_TODO_
+This application can be installed using pip with a distribution sdist tar file:
 ```
+python3 -m pip install rt-5gms-application-server-<version>.tar.gz
+```
+
+Alternatively, to installing the 5GMS Application Server from the source can be
+done using these commands:
+```
+git clone --recurse-submodules https://github.com/5G-MAG/rt-5gms-application-server.git
 cd rt-5gms-application-server
-pip install -e .
+python3 -m pip install .
 ```
 
 ## Running
 
-_TODO_
+Once [installed](#Installing), the application server can be run using the
+following command syntax:
 ```
-5gms-application-server <ContentHostingConfiguration-JSON-file>
+Syntax: 5gms-application-server [-c <configuration-file>] <ContentHostingConfiguration-JSON-file>
+```
+
+Command line help can be obtained using the -h flag:
+```
+5gms-application-server -h
 ```
 
 ## Development
