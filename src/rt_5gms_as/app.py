@@ -37,19 +37,23 @@ def get_arg_parser():
 
     Syntax:
       rt-5gsm-as -h
-      rt-5gsm-as [-c <app-config-file>] <content-config-file>
+      rt-5gsm-as [-c <app-config-file>] <content-config-file> [<certificates-config-file>]
 
     Options:
       -h         --help           Show the help text
       -c CONFIG  --config CONFIG  The application configuration file
 
     Parameters:
-      content-config-file  This the file name of a file containing a
+      content-config-file  This is the file path of a file containing a
                            ContentHostingConfiguration in JSON format.
+      certificates-config-file
+                           This is the file path for a file containing a JSON
+                           object mapping certificate IDs to PEM file paths.
     '''
     parser = argparse.ArgumentParser()
     parser.add_argument('-c', '--config', nargs=1, required=False, metavar='CONFIG', help='The application configuration file')
     parser.add_argument('contentconfig', nargs=1, metavar='CHC-JSON-FILE', help='The ContentHostingConfiguration JSON file')
+    parser.add_argument('certsconfig', nargs='?', metavar='CERTS-JSON-FILE', help='The certificates JSON file')
     return parser
 
 def list_join(l, sep1, sep2=None):
@@ -198,8 +202,10 @@ def main():
     if contentconfig is not None:
         contentconfig = contentconfig[0]
 
+    certsconfig = args.certsconfig
+
     # Create the application context
-    context = Context(config, contentconfig)
+    context = Context(config, contentconfig, certsconfig)
     context.setAppLog(log)
 
     # Create the web proxy daemon handler

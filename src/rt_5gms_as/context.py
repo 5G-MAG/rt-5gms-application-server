@@ -68,15 +68,19 @@ class Context(object):
     Tools 5GMS AS Network Function.
     '''
 
-    def __init__(self, config_filename, content_hosting_config):
+    def __init__(self, config_filename, content_hosting_config, certs_config):
         '''Constructor
 
         config_filename (str)        - filename of the application configuration
         content_hosting_config (str) - filename of the ContentHostingConfiguration JSON
         '''
+        # Keep starting configuration for reload
         self.__config_filename = config_filename
         self.__content_hosting_config = content_hosting_config
+        self.__certs_config = certs_config
+        # Load the configurations
         self.__loadConfiguration(force=True)
+        self.__loadCertificates(force=True)
         self.__loadContentHostingConfiguration(self.__config.get('5gms_as', 'provisioning_session_id'), force=True)
         self.__web_proxy = None
         self.__app_log = None
@@ -91,6 +95,8 @@ class Context(object):
         '''
         ret = False
         if self.__loadConfiguration():
+            ret = True
+        if self.__loadCertificates():
             ret = True
         if self.__loadContentHostingConfiguration(self.__config.get('5gms_as', 'provisioning_session_id')):
             ret = True
@@ -155,7 +161,35 @@ class Context(object):
         return None
 
     def getConfigVar(self, section, varname, default=None):
+        '''Get a configuration variable from the application configuration
+
+        Returns the value from the configuration file or _default_ if the value
+                cannot be found.
+        '''
         return self.__config.get(section, varname, fallback=default)
+
+    def haveCertificate(self, certificate_id):
+        '''Check is a certificate ID exists
+
+        Returns True if we have the certificate ID registered, otherwise False.
+        '''
+        return certificate_id in self.__certificates
+
+    def getCertificateFilename(self, certificate_id):
+        '''Get the filename for certificate with given ID
+
+        Return the filename for the certificate with the given _certificate_id_
+               or None if the ID doesn't exist.
+        '''
+        if self.haveCertificate(certificate_id):
+            return self.__certificates[certificate_id]
+        return None
+
+    #### Exceptions ####
+    class ConfigError(RuntimeError):
+        '''Configuration Error Exception from the 5GMS AS Context
+        '''
+        pass
 
     #### Private methods ####
     def __find_config_file(self):
@@ -185,6 +219,11 @@ class Context(object):
         '''
 
         chc = deserialize_model(json.load(open(self.__content_hosting_config, 'r')), ContentHostingConfiguration, self.__content_hosting_config, True, {}, True)
+        # Validate the certificate IDs
+        for distrib in chc['distribution_configurations']:
+            if 'certificate_id' in distrib and not self.haveCertificate(distrib['certificate_id']):
+                raise Context.ConfigError('Certificate ID %s in ContentHostingConfiguration not found in certificates map'%distrib['certificate_id'])
+        # Update configuration
         chc_hash = self.__hashOpenAPIObject(chc)
         if force or provisioning_session_id not in self.__provisioningSessions or chc_hash != self.__provisioning_sessions[provisioning_session_id]['chc_hash']:
             self.__provisioning_sessions = {provisioning_session_id: {'chc': chc, 'chc_hash': chc_hash}}
@@ -223,6 +262,21 @@ class Context(object):
             return True
         return False
 
+    def __loadCertificates(self, force=False):
+        cert_map = {}
+        if self.__certs_config is not None:
+            try:
+                with open(self.__certs_config,'r') as certs_in:
+                    cert_map = json.load(certs_in)
+            except json.decoder.JSONDecodeError as e:
+                raise Context.ConfigError('Bad JSON in certificates configuration: %s: line %i column %i'%(e.msg, e.lineno, e.colno))
+            # Relative pathnames in the configuration are relative to the file
+            cert_map = {id: self.__join_paths(self.__certs_config, filename) for id, filename in cert_map.items()}
+        if force or cert_map != self.__certificates:
+            self.__certificates = cert_map
+            return True
+        return False
+
     def __configFilename(self):
         '''Get the configured application configuration filename
 
@@ -234,6 +288,17 @@ class Context(object):
         if self.__config_filename is not None:
             return self.__config_filename
         return self.__find_config_file()
+
+    @staticmethod
+    def __join_paths(base, relpath):
+        # Already absolute so return it
+        if relpath[0] == os.path.sep:
+            return relpath
+        # Remove basename from base path if present
+        if base[-1] != os.path.sep:
+            base = os.path.dirname(base)
+        # Return absolute path for base + relpath
+        return os.path.realpath(os.path.join(base, relpath))
 
     @staticmethod
     def __hashOpenAPIObject(obj):
