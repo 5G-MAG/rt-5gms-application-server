@@ -135,9 +135,16 @@ class NginxWebProxy(WebProxyInterface):
                 server_names = dc['canonical_domain_name']
                 if 'domain_name_alias' in dc:
                     server_names += ' ' + dc['domain_name_alias']
-                # Use nginx-server.conf.tmpl file as a template for server
-                # configurations.
-                with importlib.resources.open_text(__package__,'nginx-server.conf.tmpl') as template:
+                if 'certificate_id' in dc:
+                    # Use nginx-server-ssl.conf.tmpl file as a template for 
+                    # HTTPS server configurations.
+                    certificate_filename = self._context.getCertificateFilename(dc['certificate_id'])
+                    server_template_file = 'nginx-server-ssl.conf.tmpl'
+                else:
+                    # Use nginx-server.conf.tmpl file as a template for HTTP
+                    # server configurations.
+                    server_template_file = 'nginx-server.conf.tmpl'
+                with importlib.resources.open_text(__package__, server_template_file) as template:
                     for line in template:
                         server_configs += line.format(**locals())
         try:
