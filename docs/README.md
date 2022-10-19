@@ -61,7 +61,7 @@ mkdir /tmp/rt-5gms-as/logs
 Run the example directly:
 ```
 cd rt-5gms-application-server/src
-python3 -m rt_5gms_as.app ../docs/rt-common-shared/5gms/examples/ContentHostingConfiguration_Big-Buck-Bunny_pull-ingest.json
+python3 -m rt_5gms_as.app ../external/rt-common-shared/5gms/examples/ContentHostingConfiguration_Big-Buck-Bunny_pull-ingest.json
 ```
 
 This will start nginx with a configuration which will provide a reverse proxy to the Big Buck Bunny DASH media at <http://localhost:8080/m4d/provisioning-session-d54a1fcc-d411-4e32-807b-2c60dbaeaf5f/BigBuckBunny_4s_onDemand_2014_05_09.mpd>.
