@@ -30,5 +30,5 @@ where = ["src"]
 "rt_5gms_as.proxies" = ["*.tmpl"]
 
 [tool.setuptools.data-files]
-'share/doc/rt-5gms-application-server' = ['docs/*']
+'share/doc/rt-5gms-application-server' = ['docs/*', 'ATTRIBUTION_NOTICE']
 'share/doc/rt-5gms-application-server/examples' = ['external/rt-common-shared/5gms/examples/*']
