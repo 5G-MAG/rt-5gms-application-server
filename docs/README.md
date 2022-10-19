@@ -32,7 +32,7 @@ Generate the OpenAPI python modules (these are not part of the source
 distribution):
 ```
 cd rt-5gms-application-server
-build_scripts/generate_openapi
+build_scripts/generate_5gms_as_openapi
 ```
 
 Create a configuration to run the application server as a local, unprivileged,
