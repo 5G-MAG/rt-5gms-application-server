@@ -75,6 +75,8 @@ Command line help can be obtained using the -h flag:
 5gms-application-server -h
 ```
 
+Please note that the default configuration will require the application server to be run as the root user as it uses the privileged port 80 and stores logs and caches in root owned directories. If you wish to run this as an unprivileged user you will need to follow the instructions for creating and using an alternative configuration file. These instructions can be found in the [development documentation](docs/README.md#running-the-example-without-building).
+
 ## Development
 
 This project follows
