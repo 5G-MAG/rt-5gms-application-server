@@ -14,7 +14,7 @@ Files in this repository:
   - generate_5gms_as_openapi - Will generate the OpenAPI python modules if not already present.
 - docs/              - Development documentation and examples.
   - README.md - This document.
-  - chc.json - An example ContentHostingConfiguration JSON file which provisions a pull-ingest AS for "Big Buck Bunny".
+  - example-application-server.conf - An application configuration which documents the defaults and meaning for each application configuration option.
 - external/          - Directory containing submodule mount points.
   - rt-common-shared/ - The common shared examples and scripts.
 - src/               - The application source modules.
