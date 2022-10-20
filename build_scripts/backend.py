@@ -21,7 +21,11 @@ import logging
 from setuptools import build_meta as _orig
 import subprocess
 
-replace = ['build_sdist']
+replace = ['build_sdist',
+           'build_wheel',
+           'get_requires_for_build_sdist',
+           'get_requires_for_build_wheel',
+           'prepare_metadata_for_build_wheel']
 log = logging.getLogger(__name__)
 
 # Copy all exported variables from the original
@@ -48,3 +52,21 @@ def _check_openapi():
 def build_sdist(sdist_directory, config_settings=None):
     _check_openapi()
     return _orig.build_sdist(sdist_directory, config_settings)
+
+def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+    _check_openapi()
+    return _orig.build_wheel(wheel_directory, config_settings,
+                             metadata_directory)
+
+def prepare_metadata_for_build_wheel(metadata_directory, config_settings=None):
+    _check_openapi()
+    return _orig.prepare_metadata_for_build_wheel(metadata_directory,
+                                                  config_settings)
+
+def get_requires_for_build_sdist(config_settings=None):
+    _check_openapi()
+    return _orig.get_requires_for_build_sdist(config_settings)
+
+def get_requires_for_build_wheel(config_settings=None):
+    _check_openapi()
+    return _orig.get_requires_for_build_wheel(config_settings)
