@@ -49,6 +49,8 @@ import logging
 import os.path
 import time
 
+from .utils import async_create_task
+
 __web_proxies = []
 
 def add_web_proxy(cls,prio):
@@ -289,7 +291,7 @@ class WebProxyInterface(object):
         if self.__daemon['proc'] is None:
             return True
         try:
-            comm_task = asyncio.create_task(self.__daemon['proc'].communicate(), name='wait-for-web-proxy-daemon')
+            comm_task = async_create_task(self.__daemon['proc'].communicate(), name='wait-for-web-proxy-daemon')
             await asyncio.wait({comm_task}, timeout=timeout)
             self.__daemon['returncode'] = self.__daemon['proc'].returncode
             (stdout, stderr) = comm_task.result()

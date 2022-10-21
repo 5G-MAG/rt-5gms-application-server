@@ -21,6 +21,7 @@
 General utility functions
 '''
 
+import asyncio
 import subprocess
 
 def find_executable_on_path(cmd):
@@ -35,3 +36,7 @@ def find_executable_on_path(cmd):
         return None
     return result.stdout.decode("utf-8").strip()
 
+def async_create_task(*args, **kwargs):
+    'Wrapper for asyncio.create_task to remove unimplemented kwargs'
+    allowedkwargs = {key: value for key,value in kwargs.items() if key in asyncio.create_task.__kwdefaults__}
+    return asyncio.create_task(*args, **allowedkwargs)
