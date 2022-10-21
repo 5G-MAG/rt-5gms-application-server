@@ -30,6 +30,7 @@ import sys
 
 from .proxy_factory import WebProxy, list_registered_web_proxies
 from .context import Context
+from .utils import async_create_task
 
 def get_arg_parser():
     '''
@@ -88,7 +89,7 @@ def sighup_handler(sig, context):
     # reload configuration
     if context.reload():
         # configuration changed, reload/restart proxy
-        asyncio.create_task(context.webProxy().reload())
+        async_create_task(context.webProxy().reload(), name='Proxy-reload')
 
 def exit_handler(sig, context):
     '''Signal handler for INT/QUIT/TERM signals
@@ -130,7 +131,7 @@ async def __app(context):
         return 1
 
     # Create a task which will wait for the web proxy daemon to exit
-    wait_task = asyncio.create_task(context.webProxy().wait(), name='Proxy-monitor')
+    wait_task = async_create_task(context.webProxy().wait(), name='Proxy-monitor')
 
     # TODO: Create HTTP server to handle M2 interface and add task to main loop
     # TODO: Create HTTP server to handle M3 interface and add task to main loop
@@ -153,7 +154,7 @@ async def __app(context):
             # Daemon started ok, start waiting for the new child process to exit
             else:
                 context.appLog().info("Web proxy process exited, has been restarted")
-                wait_task = asyncio.create_task(context.webProxy().wait(), name='Proxy-monitor')
+                wait_task = async_create_task(context.webProxy().wait(), name='Proxy-monitor')
 
     # We are exiting, tidy up other tasks
     if not wait_task.done():
