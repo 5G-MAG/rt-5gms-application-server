@@ -1,0 +1,33 @@
+openapi: 3.0.0
+info:
+  title: M3_merged
+  version: 0.0.0
+  description: |
+    5GMS AS M3 API
+    Copyright © 2022 British Broadcasting Corporation
+    All rights reserved.
+tags:
+  - name: M3_ContentHostingProvisioning
+    description: '5G Media Streaming: Application Server Provisioning (M3) APIs: Content Hosting Provisioning'
+  - name: M3_ServerCertificatesProvisioning
+    description: '5G Media Streaming: Application Server Provisioning (M3) APIs: Server Certificates Provisioning'
+externalDocs:
+  description: 'TS 26.512 V16.x.x; 5G Media Streaming (5GMS); Protocols'
+  url: 'https://www.3gpp.org/ftp/Specs/archive/26_series/26.512/'
+servers:
+  - url: '{apiRoot}/3gpp-m3/v1'
+    variables:
+      apiRoot:
+        default: https://example.com
+        description: See 3GPP TS 29.512 clause 6.1.
+paths:
+  /content-hosting-configurations:
+    $ref: 'M3_ContentHostingProvisioning.yaml#/paths/~1content-hosting-configurations'
+  /content-hosting-configurations/{provisioningSessionId}:
+    $ref: 'M3_ContentHostingProvisioning.yaml#/paths/~1content-hosting-configurations~1{provisioningSessionId}'
+  /content-hosting-configurations/{provisioningSessionId}/purge:
+    $ref: 'M3_ContentHostingProvisioning.yaml#/paths/~1content-hosting-configurations~1{provisioningSessionId}~1purge'
+  /certificates:
+    $ref: 'M3_ServerCertificatesProvisioning.yaml#/paths/~1certificates'
+  /certificates/{provisioningSessionId}:{certificateId}:
+    $ref: 'M3_ServerCertificatesProvisioning.yaml#/paths/~1certificates~1{provisioningSessionId}:{certificateId}'

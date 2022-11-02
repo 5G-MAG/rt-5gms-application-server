@@ -25,12 +25,29 @@ This NF provides the configuration interface for an external web proxy daemon.
 import argparse
 import asyncio
 import logging
+import pkg_resources
 import signal
 import sys
+import uvicorn
+
+from fastapi import FastAPI
+from fastapi.responses import JSONResponse, PlainTextResponse, Response
 
 from .proxy_factory import WebProxy, list_registered_web_proxies
 from .context import Context
+from .server import server
 from .utils import async_create_task
+from .exceptions import ProblemException, NoProblemException
+from .openapi_5g.apis.default_api import router as m3_router
+
+__pkg = None
+__pkg_version = 'Devel'
+try:
+    __pkg = pkg_resources.get_distribution('rt-5gms-application-server')
+    if __pkg is not None:
+        __pkg_version = __pkg.version
+except:
+    pass
 
 def get_arg_parser():
     '''
@@ -38,23 +55,14 @@ def get_arg_parser():
 
     Syntax:
       rt-5gsm-as -h
-      rt-5gsm-as [-c <app-config-file>] <content-config-file> [<certificates-config-file>]
+      rt-5gsm-as [-c <app-config-file>]
 
     Options:
       -h         --help           Show the help text
       -c CONFIG  --config CONFIG  The application configuration file
-
-    Parameters:
-      content-config-file  This is the file path of a file containing a
-                           ContentHostingConfiguration in JSON format.
-      certificates-config-file
-                           This is the file path for a file containing a JSON
-                           object mapping certificate IDs to PEM file paths.
     '''
     parser = argparse.ArgumentParser()
     parser.add_argument('-c', '--config', nargs=1, required=False, metavar='CONFIG', help='The application configuration file')
-    parser.add_argument('contentconfig', nargs=1, metavar='CHC-JSON-FILE', help='The ContentHostingConfiguration JSON file')
-    parser.add_argument('certsconfig', nargs='?', metavar='CERTS-JSON-FILE', help='The certificates JSON file')
     return parser
 
 def list_join(l, sep1, sep2=None):
@@ -133,13 +141,32 @@ async def __app(context):
     # Create a task which will wait for the web proxy daemon to exit
     wait_task = async_create_task(context.webProxy().wait(), name='Proxy-monitor')
 
+    server.setContext(context)
+
+    m3_app = FastAPI(title='5G-MAG M3', description='5GMS AS M3 API Copyright © 2022 British Broadcasting Corporation All rights reserved.', version='0.0.0', debug=False)
+    #m3_app.debug = True
+
+    @m3_app.exception_handler(ProblemException)
+    async def problem_exception_handler(request, exc):
+        return JSONResponse(status_code=exc.status_code, content=exc.object)
+
+    @m3_app.exception_handler(NoProblemException)
+    async def no_problem_exception_handler(request, exc):
+        return Response(exc.body, status_code=exc.status_code, headers=exc.headers, media_type=exc.media_type)
+
     # TODO: Create HTTP server to handle M2 interface and add task to main loop
-    # TODO: Create HTTP server to handle M3 interface and add task to main loop
+
+    # Create HTTP server to handle M3 interface and add task to main loop
+    m3_app.include_router(m3_router, prefix="/3gpp-m3/v1")
+
+    m3_config = uvicorn.Config(m3_app, host=context.getConfigVar('5gms_as','m3_listen'), port=int(context.getConfigVar('5gms_as','m3_port')), log_level='warning', headers=[('Server','5GMSd-AS/'+__pkg_version)])
+    m3_server = uvicorn.Server(m3_config)
+    m3_serve_task = async_create_task(m3_server.serve(), name='M3-server')
 
     # Main application loop
     while not app_exit.done():
         # Wait for one of the background tasks to exit
-        done, pending = await asyncio.wait([app_exit, wait_task], return_when=asyncio.FIRST_COMPLETED)
+        done, pending = await asyncio.wait([app_exit, wait_task, m3_serve_task], return_when=asyncio.FIRST_COMPLETED)
         # If it was the web proxy daemon task that finished, handle the daemon
         # exit by restarting it
         if wait_task.done():
@@ -147,6 +174,9 @@ async def __app(context):
             if context.webProxy().rapidStarts() > 5:
                 context.appLog().error("%s web proxy restarting too quickly, aborting...", context.webProxy().name())
                 app_exit.set_result(1)
+            # do nothing if we're exiting
+            elif app_exit.done():
+                pass
             # if the daemon won't restart, abort
             elif not await context.webProxy().startDaemon():
                 context.appLog().error("Unable to start %s web proxy", context.webProxy().name())
@@ -155,11 +185,25 @@ async def __app(context):
             else:
                 context.appLog().info("Web proxy process exited, has been restarted")
                 wait_task = async_create_task(context.webProxy().wait(), name='Proxy-monitor')
+        elif m3_serve_task.done():
+            # M3 interface has quit, abort app
+            context.appLog().error("M3 interface finished, aborting application server")
+            app_exit.set_result(1)
+
 
     # We are exiting, tidy up other tasks
     if not wait_task.done():
         wait_task.cancel()
-        await wait_task
+        try:
+            await wait_task
+        except asyncio.exceptions.CancelledError:
+            pass
+    if not m3_serve_task.done():
+        m3_serve_task.cancel()
+        try:
+            await m3_serve_task
+        except asyncio.exceptions.CancelledError:
+            pass
 
     # Stop the web proxy daemon if it's running
     if not await context.webProxy().stopDaemon():
@@ -198,15 +242,8 @@ def main():
     if config is not None:
         config = config[0]
 
-    # Get the ContentHostingConfiguration file name
-    contentconfig = args.contentconfig
-    if contentconfig is not None:
-        contentconfig = contentconfig[0]
-
-    certsconfig = args.certsconfig
-
     # Create the application context
-    context = Context(config, contentconfig, certsconfig)
+    context = Context(config)
     context.setAppLog(log)
 
     # Create the web proxy daemon handler

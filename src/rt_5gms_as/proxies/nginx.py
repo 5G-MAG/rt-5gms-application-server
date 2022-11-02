@@ -104,9 +104,7 @@ class NginxWebProxy(WebProxyInterface):
         fastcgi_temp_path = self._context.getConfigVar('5gms_as.nginx','fastcgi_temp')
         uwsgi_temp_path = self._context.getConfigVar('5gms_as.nginx','uwsgi_temp')
         scgi_temp_path = self._context.getConfigVar('5gms_as.nginx','scgi_temp')
-        # provisioning session should come from the AF via M3
-        provisioning_session_id = self._context.getConfigVar('5gms_as','provisioning_session_id')
-        m4d_path_prefix = self._context.getConfigVar('5gms_as','m4d_path_prefix')
+        m4d_path_prefix_format = self._context.getConfigVar('5gms_as','m4d_path_prefix')
         # Create caching directives if we have a cache dir configured
         proxy_cache_path_directive = ''
         proxy_cache_directive = ''
@@ -115,30 +113,32 @@ class NginxWebProxy(WebProxyInterface):
             proxy_cache_directive = 'proxy_cache cacheone;'
         # Create the server configurations from the CHCs
         server_configs=''
-        for i in self._context.contentHostingConfigurations():
-            if not i['ingest_configuration']['pull'] or i['ingest_configuration']['protocol'] != 'urn:3gpp:5gms:content-protocol:http-pull-ingest':
+        for provisioning_session_id in self._context.getProvisioningSessionIds():
+            m4d_path_prefix = m4d_path_prefix_format.format(provisioningSessionId=provisioning_session_id)
+            i = self._context.findContentHostingConfigurationByProvisioningSession(provisioning_session_id)
+            if not i.ingest_configuration.pull or i.ingest_configuration.protocol != 'urn:3gpp:5gms:content-protocol:http-pull-ingest':
                 self.log.error("Can only handle http-pull-ingest sources at present")
                 return False
-            downstream_origin=i['ingest_configuration']['entry_point']
+            downstream_origin=i.ingest_configuration.entry_point
             if downstream_origin[-1] == '/':
                 downstream_origin = downstream_origin[:-1]
-            for dc in i['distribution_configurations']:
+            for dc in i.distribution_configurations:
                 rewrite_rules=''
-                if 'path_rewrite_rules' in dc:
-                    for rr in dc['path_rewrite_rules']:
-                        (regex, replace) = self.__transform_rewrite_rules(rr['request_pattern'],rr['mapped_path'])
+                if dc.path_rewrite_rules is not None:
+                    for rr in dc.path_rewrite_rules:
+                        (regex, replace) = self.__transform_rewrite_rules(rr.request_pattern,rr.mapped_path)
                         if regex is not None:
                             rewrite_rules += '      rewrite "%s" "%s" break;\n'%(regex,replace)
                         else:
-                            self.log.error("Unsafe or invalid rewrite rule: %s => %s", rr['request_pattern'], rr['mapped_path'])
+                            self.log.error("Unsafe or invalid rewrite rule: %s => %s", rr.request_pattern, rr.mapped_path)
                             return False
-                server_names = dc['canonical_domain_name']
-                if 'domain_name_alias' in dc:
-                    server_names += ' ' + dc['domain_name_alias']
-                if 'certificate_id' in dc:
+                server_names = dc.canonical_domain_name
+                if dc.domain_name_alias is not None:
+                    server_names += ' ' + dc.domain_name_alias
+                if dc.certificate_id is not None:
                     # Use nginx-server-ssl.conf.tmpl file as a template for 
                     # HTTPS server configurations.
-                    certificate_filename = self._context.getCertificateFilename(dc['certificate_id'])
+                    certificate_filename = self._context.getCertificateFilename(self._context.joinCertificateId(provisioning_session_id, dc.certificate_id))
                     server_template_file = 'nginx-server-ssl.conf.tmpl'
                 else:
                     # Use nginx-server.conf.tmpl file as a template for HTTP
