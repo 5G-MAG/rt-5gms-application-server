@@ -26,9 +26,8 @@ daemon that can be controlled by the AS is nginx
 ## Install dependencies
 
 ```
-sudo apt install git python3-venv
-python3 -m pip
-pip install build
+sudo apt install git python3-pip python3-venv
+python3 -m pip install build
 ```
 
 ## Downloading
