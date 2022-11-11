@@ -30,10 +30,13 @@ Files in this repository:
 Running the example without building
 ------------------------------------
 Make sure that git, java, wget and nginx are installed on the local system and
-can be found on the current command path (`$PATH`).
+can be found on the current command path (`$PATH`):
+```
+sudo apt install git wget nginx default-jdk python3-regex
+```
 
 Generate the OpenAPI python modules (these are not part of the source
-distribution):
+distribution). Read documentation below on "Regenerating the 5G API bindings":
 ```
 cd rt-5gms-application-server
 build_scripts/generate_5gms_as_openapi
