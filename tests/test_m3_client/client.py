@@ -21,11 +21,12 @@
 This class provides an interface to communicate with a 5GMS Application Server.
 '''
 
+import aiofiles
 import json
 import logging
 import os.path
 import os
-from requests import Request, Session
+import httpx
 import sys
 from typing import Optional, Union, Tuple, List
 
@@ -62,7 +63,7 @@ class M3Client(object):
         self.__session = None
         self.__log = logging.getLogger(__name__)
 
-    def __do_request(self, method: str, url_suffix: str, body: Union[str,bytes], content_type: str, headers: Optional[dict] = None) -> dict:
+    async def __do_request(self, method: str, url_suffix: str, body: Union[str,bytes], content_type: str, headers: Optional[dict] = None) -> dict:
         if isinstance(body, str):
             body = bytes(body)
         req_headers = {'Content-Type': content_type}
@@ -70,20 +71,18 @@ class M3Client(object):
             req_headers.update(headers)
         url = 'http://'+self.__host_address[0]+':'+str(self.__host_address[1])+'/3gpp-m3/v1'+url_suffix
         if self.__session is None:
-            self.__session = Session()
-            self.__session.headers.update({'User-Agent': '5GMS-AF/testing'})
-        req = Request(method, url, headers=req_headers, data=body)
-        prepped_req = self.__session.prepare_request(req)
-        resp = self.__session.send(prepped_req)
+            self.__session = httpx.AsyncClient(http1=False, http2=True, headers={'User-Agent': '5GMS-AF/testing'})
+        req = self.__session.build_request(method, url, headers=req_headers, data=body)
+        resp = await self.__session.send(req)
         return {'status_code': resp.status_code, 'body': resp.text, 'headers': resp.headers}
 
-    def addCertificateFromPemFile(self, provisioning_session_id: str, certificate_id: str, pem_filename: str) -> bool:
-        with open(pem_filename, 'rb') as pem_in:
-            pem = pem_in.read()
-        return self.addCertificateFromPemData(provisioning_session_id, certificate_id, pem)
+    async def addCertificateFromPemFile(self, provisioning_session_id: str, certificate_id: str, pem_filename: str) -> bool:
+        async with aiofiles.open(pem_filename, mode='rb') as pem_in:
+            pem = await pem_in.read()
+        return await self.addCertificateFromPemData(provisioning_session_id, certificate_id, pem)
 
-    def addCertificateFromPemData(self, provisioning_session_id: str, certificate_id: str, pem: str) -> bool:
-        result = self.__do_request('POST', '/certificates/'+provisioning_session_id+':'+certificate_id, pem, 'application/x-pem-file')
+    async def addCertificateFromPemData(self, provisioning_session_id: str, certificate_id: str, pem: str) -> bool:
+        result = await self.__do_request('POST', '/certificates/'+provisioning_session_id+':'+certificate_id, pem, 'application/x-pem-file')
         if result['status_code'] == 201:
             self.__log.info('Certificate added successfully as %s', result['headers']['Location'])
             return True
@@ -106,13 +105,13 @@ class M3Client(object):
             else:
                 raise M3ServerException(msg, status_code=result['status_code'])
 
-    def updateCertificateFromPemFile(self, provisioning_session_id: str, certificate_id: str, pem_filename: str) -> bool:
-        with open(pem_file, 'rb') as pem_in:
-            pem = pem_in.read()
-        return self.updateCertificateFromPemData(provisioning_session_id, certificate_id, pem)
+    async def updateCertificateFromPemFile(self, provisioning_session_id: str, certificate_id: str, pem_filename: str) -> bool:
+        async with aiofiles.open(pem_file, mode='rb') as pem_in:
+            pem = await pem_in.read()
+        return await self.updateCertificateFromPemData(provisioning_session_id, certificate_id, pem)
 
-    def updateCertificateFromPemData(self, provisioning_session_id: str, certificate_id: str, pem: str) -> bool:
-        result = self.__do_request('PUT', '/certificates/'+provisioning_session_id+':'+certificate_id, pem, 'application/x-pem-file')
+    async def updateCertificateFromPemData(self, provisioning_session_id: str, certificate_id: str, pem: str) -> bool:
+        result = await self.__do_request('PUT', '/certificates/'+provisioning_session_id+':'+certificate_id, pem, 'application/x-pem-file')
         if result['status_code'] == 200:
             self.__log.debug('Certificate %s:%s updated successfully', provisioning_session_id, certificate_id)
             return True
@@ -138,8 +137,8 @@ class M3Client(object):
             else:
                 raise M3ServerException(msg, status_code=result['status_code'])
 
-    def deleteCertificate(self, provisioning_session_id: str, certificate_id: str) -> bool:
-        result = self.__do_request('DELETE', '/certificates/'+provisioning_session_id+':'+certificate_id, None, 'application/json')
+    async def deleteCertificate(self, provisioning_session_id: str, certificate_id: str) -> bool:
+        result = await self.__do_request('DELETE', '/certificates/'+provisioning_session_id+':'+certificate_id, None, 'application/json')
         if result['status_code'] == 204:
             self.__log.debug('Certificate delete successfully')
             return True
@@ -162,8 +161,8 @@ class M3Client(object):
             else:
                 raise M3ServerException(msg, status_code=result['status_code'])
 
-    def listCertificates(self) -> List[str]:
-        result = self.__do_request('GET', '/certificates', None, 'application/json')
+    async def listCertificates(self) -> List[str]:
+        result = await self.__do_request('GET', '/certificates', None, 'application/json')
         if result['status_code'] == 200:
             return [str(s) for s in json.loads(result['body'])]
         elif result['status_code'] == 500:
@@ -177,17 +176,17 @@ class M3Client(object):
             else:
                 raise M3ServerException(msg, status_code=result['status_code'])
 
-    def addContentHostingConfigurationFromJsonFile(self, provisioning_session_id: str, chc_filename: str) -> bool:
-        with open(chc_filename,'rb') as chc_in:
-            chc = chc_in.read()
-        return self.addContentHostingConfigurationFromJsonString(provisioning_session_id, chc)
+    async def addContentHostingConfigurationFromJsonFile(self, provisioning_session_id: str, chc_filename: str) -> bool:
+        async with aiofiles.open(chc_filename, mode='rb') as chc_in:
+            chc = await chc_in.read()
+        return await self.addContentHostingConfigurationFromJsonString(provisioning_session_id, chc)
 
-    def addContentHostingConfigurationFromObject(self, provisioning_session_id: str, chc: dict) -> bool:
+    async def addContentHostingConfigurationFromObject(self, provisioning_session_id: str, chc: dict) -> bool:
         chcstr = json.dumps(chc)
-        return self.addContentHostingConfigurationFromJsonString(provisioning_session_id, chcstr)
+        return await self.addContentHostingConfigurationFromJsonString(provisioning_session_id, chcstr)
 
-    def addContentHostingConfigurationFromJsonString(self, provisioning_session_id: str, chc: str) -> bool:
-        result = self.__do_request('POST', '/content-hosting-configurations/'+provisioning_session_id, chc, 'application/json')
+    async def addContentHostingConfigurationFromJsonString(self, provisioning_session_id: str, chc: str) -> bool:
+        result = await self.__do_request('POST', '/content-hosting-configurations/'+provisioning_session_id, chc, 'application/json')
         if result['status_code'] == 201:
             self.__log.debug('ContentHostingConfiguration added successfully as %s'%result['headers']['Location'])
             return True
@@ -210,17 +209,17 @@ class M3Client(object):
             else:
                 raise M3ServerException(msg, status_code=result['status_code'])
 
-    def updateContentHostingConfigurationFromJsonFile(self, provisioning_session_id: str, chc_file: str) -> bool:
-        with open(chc_file,'rb') as chc_in:
-            chc = chc_in.read()
-        return self.updateContentHostingConfigurationFromJsonString(self, provisioning_session_id, chc)
+    async def updateContentHostingConfigurationFromJsonFile(self, provisioning_session_id: str, chc_file: str) -> bool:
+        async with aiofiles.open(chc_file, mode='rb') as chc_in:
+            chc = await chc_in.read()
+        return await self.updateContentHostingConfigurationFromJsonString(self, provisioning_session_id, chc)
 
-    def updateContentHostingConfigurationFromObject(self, provisioning_session_id: str, chc: dict) -> bool:
+    async def updateContentHostingConfigurationFromObject(self, provisioning_session_id: str, chc: dict) -> bool:
         chcstr = json.dumps(chc)
-        return self.updateContentHostingConfigurationFromJsonString(self, provisioning_session_id, chcstr)
+        return await self.updateContentHostingConfigurationFromJsonString(self, provisioning_session_id, chcstr)
 
-    def updateContentHostingConfigurationFromJsonString(self, provisioning_session_id: str, chc: str) -> bool:
-        result = self.__do_request('PUT', '/content-hosting-configurations/'+provisioning_session_id, chc, 'application/json')
+    async def updateContentHostingConfigurationFromJsonString(self, provisioning_session_id: str, chc: str) -> bool:
+        result = await self.__do_request('PUT', '/content-hosting-configurations/'+provisioning_session_id, chc, 'application/json')
         if result['status_code'] == 200:
             self.__log.debug('ContentHostingConfiguration updated')
             return True
@@ -246,8 +245,8 @@ class M3Client(object):
             else:
                 raise M3ServerException(msg, status_code=result['status_code'])
 
-    def deleteContentHostingConfiguration(self, provisioning_session_id: str) -> bool:
-        result = self.__do_request('DELETE', '/content-hosting-configurations/'+provisioning_session_id, None, 'application/json')
+    async def deleteContentHostingConfiguration(self, provisioning_session_id: str) -> bool:
+        result = await self.__do_request('DELETE', '/content-hosting-configurations/'+provisioning_session_id, None, 'application/json')
         if result['status_code'] == 204:
             self.__log.debug('ContentHostingConfiguration for %s deleted', provisioning_session_id)
             return True
@@ -268,8 +267,8 @@ class M3Client(object):
             else:
                 raise M3ServerException(msg, status_code=result['status_code'])
 
-    def listContentHostingConfigurations(self) -> List[str]:
-        result = self.__do_request('GET', '/content-hosting-configurations', None, 'application/json')
+    async def listContentHostingConfigurations(self) -> List[str]:
+        result = await self.__do_request('GET', '/content-hosting-configurations', None, 'application/json')
         if result['status_code'] == 200:
             return [str(s) for s in json.loads(result['body'])]
         elif result['status_code'] == 500:

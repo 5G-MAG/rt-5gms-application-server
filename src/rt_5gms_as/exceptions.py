@@ -21,8 +21,18 @@ Reference Tools: 5GMS Application Server Exceptions
 '''
 from typing import Optional
 
+# Get package version from installation distribution info
+__pkg = None
+__pkg_version = 'Devel'
+try:
+    __pkg = pkg_resources.get_distribution('rt-5gms-application-server')
+    if __pkg is not None:
+        __pkg_version = __pkg.version
+except:
+    pass
+
 class ProblemException(Exception):
-    def __init__(self, status_code=500, title=None, detail=None, problem_type=None, instance=None):
+    def __init__(self, status_code=500, title=None, detail=None, problem_type=None, instance=None, headers: Optional[dict] = None):
         # defaults
         if title is None:
             title = 'Internal Server Error'
@@ -32,12 +42,17 @@ class ProblemException(Exception):
             problem_type = '/3gpp-m3/v1'
         if instance[:len(problem_type)] == problem_type:
             instance = instance[len(problem_type):]
+        if headers is None:
+            headers = {}
+        if 'server' not in [k.lower() for k in headers.keys()]:
+            headers['Server'] = '5GMSd-AS/'+__pkg_version
         # Store values
         self.status_code = status_code
         self.title = title
         self.detail = detail
         self.problem_type = problem_type
         self.instance = instance
+        self.headers = headers
         # Create Problem object
         self.object = {'title': self.title, 'detail': self.detail, 'type': self.problem_type, 'status': self.status_code}
         if self.instance is not None:
@@ -50,6 +65,10 @@ class NoProblemException(Exception):
     def __init__(self, body: Optional[str] = None, status_code: int = 200, media_type: Optional[str] = 'application/octet-stream', headers: Optional[dict] = None):
         if body is None:
             body = ''
+        if headers is None:
+            headers = {}
+        if 'server' not in [k.lower() for k in headers.keys()]:
+            headers['Server'] = '5GMSd-AS/'+__pkg_version
         self.body = body
         self.status_code = status_code
         self.media_type = media_type

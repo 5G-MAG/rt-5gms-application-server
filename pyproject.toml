@@ -10,9 +10,13 @@ dependencies = [
     'urllib3 >= 1.25.3',
     'python-dateutil',
     'regex >= 2.5.0',
-    'uvicorn >= 0.15.0',
+    'hypercorn >= 0.14.3',
     'fastapi >= 0.78.0',
-    'python-multipart >= 0.0.5'
+    'python-multipart >= 0.0.5',
+    'httpx >= 0.21.1',
+    'h11 >= 0.11.0',
+    'h2 >= 4.1.0',
+    'aiofiles >= 0.7.0'
 ]
 requires-python = ">=3.7"
 scripts = { 5gms-application-server = "rt_5gms_as.app:main" }

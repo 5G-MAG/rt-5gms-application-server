@@ -46,6 +46,7 @@ Options:
                              List known ContentHostingConfigurations or perform an operation on ContentHostingConfigurations.
 '''
 
+import asyncio
 from docopt import docopt
 import os.path
 import os
@@ -67,6 +68,9 @@ def certificates_list_result(result: list) -> int:
 def chc_list_result(result: list) -> int:
     print('Known content hosting configurations:\n   '+'\n   '.join(result))
     return 0
+
+async def run_op(op, args, formatter):
+    return formatter(await op(*args))
 
 def main():
     args = docopt(__doc__, version='1.0.0')
@@ -94,7 +98,7 @@ def main():
         else:
             op_args = [args[a] for a in op['args']]
             try:
-                return op['format'](op['fn'](*op_args))
+                return asyncio.run(run_op(op['fn'], op_args, op['format']))
             except M3ClientException as err:
                 print("There was a problem with the request: %s"%str(err))
                 return 1

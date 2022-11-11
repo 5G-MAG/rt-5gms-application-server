@@ -24,11 +24,12 @@ This NF provides the configuration interface for an external web proxy daemon.
 '''
 import argparse
 import asyncio
+import hypercorn
+import hypercorn.asyncio
 import logging
 import pkg_resources
 import signal
 import sys
-import uvicorn
 
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse, PlainTextResponse, Response
@@ -148,7 +149,7 @@ async def __app(context):
 
     @m3_app.exception_handler(ProblemException)
     async def problem_exception_handler(request, exc):
-        return JSONResponse(status_code=exc.status_code, content=exc.object)
+        return JSONResponse(status_code=exc.status_code, content=exc.object, headers=exc.headers)
 
     @m3_app.exception_handler(NoProblemException)
     async def no_problem_exception_handler(request, exc):
@@ -159,9 +160,9 @@ async def __app(context):
     # Create HTTP server to handle M3 interface and add task to main loop
     m3_app.include_router(m3_router, prefix="/3gpp-m3/v1")
 
-    m3_config = uvicorn.Config(m3_app, host=context.getConfigVar('5gms_as','m3_listen'), port=int(context.getConfigVar('5gms_as','m3_port')), log_level='warning', headers=[('Server','5GMSd-AS/'+__pkg_version)])
-    m3_server = uvicorn.Server(m3_config)
-    m3_serve_task = async_create_task(m3_server.serve(), name='M3-server')
+    # TODO: change global server header '5GMSd-AS/'+__pkg_version
+    m3_config = hypercorn.Config.from_mapping(bind=context.getConfigVar('5gms_as','m3_listen')+':'+context.getConfigVar('5gms_as','m3_port'), loglevel='WARNING')
+    m3_serve_task = async_create_task(hypercorn.asyncio.serve(m3_app, m3_config), name='M3-server')
 
     # Main application loop
     while not app_exit.done():
