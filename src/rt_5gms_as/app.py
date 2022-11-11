@@ -50,6 +50,8 @@ try:
 except:
     pass
 
+_app_server_hdr = '5GMSd-AS/'+__pkg_version
+
 def get_arg_parser():
     '''
     Create the ArgumentParser object for this application
@@ -110,6 +112,11 @@ def exit_handler(sig, context):
     context.appLog().info("Signal %r received, exitting...", sig)
     context.exitWithReturnCode(0)
 
+class AppJSONResponse(JSONResponse):
+    def __init__(self, *args, **kwargs):
+        super(AppJSONResponse,self).__init__(*args, **kwargs)
+        self.headers['Server'] = _app_server_hdr
+
 async def __app(context):
     '''Asynchronous app entry point
 
@@ -144,24 +151,27 @@ async def __app(context):
 
     server.setContext(context)
 
-    m3_app = FastAPI(title='5G-MAG M3', description='5GMS AS M3 API Copyright © 2022 British Broadcasting Corporation All rights reserved.', version='0.0.0', debug=False)
+    m3_app = FastAPI(title='5G-MAG M3', description='5GMS AS M3 API Copyright © 2022 British Broadcasting Corporation All rights reserved.', version='0.0.0', debug=False, default_response_class=AppJSONResponse)
     #m3_app.debug = True
 
     @m3_app.exception_handler(ProblemException)
     async def problem_exception_handler(request, exc):
-        return JSONResponse(status_code=exc.status_code, content=exc.object, headers=exc.headers)
+        return AppJSONResponse(status_code=exc.status_code, content=exc.object, headers=exc.headers)
 
     @m3_app.exception_handler(NoProblemException)
     async def no_problem_exception_handler(request, exc):
-        return Response(exc.body, status_code=exc.status_code, headers=exc.headers, media_type=exc.media_type)
+        hdrs = exc.headers
+        if hdrs is None:
+            hdrs = {}
+        hdrs['server'] = _app_server_hdr
+        return Response(exc.body, status_code=exc.status_code, headers=hdrs, media_type=exc.media_type)
 
     # TODO: Create HTTP server to handle M2 interface and add task to main loop
 
     # Create HTTP server to handle M3 interface and add task to main loop
     m3_app.include_router(m3_router, prefix="/3gpp-m3/v1")
 
-    # TODO: change global server header '5GMSd-AS/'+__pkg_version
-    m3_config = hypercorn.Config.from_mapping(bind=context.getConfigVar('5gms_as','m3_listen')+':'+context.getConfigVar('5gms_as','m3_port'), loglevel='WARNING')
+    m3_config = hypercorn.Config.from_mapping(include_server_header=False, bind=context.getConfigVar('5gms_as','m3_listen')+':'+context.getConfigVar('5gms_as','m3_port'), loglevel='WARNING')
     m3_serve_task = async_create_task(hypercorn.asyncio.serve(m3_app, m3_config), name='M3-server')
 
     # Main application loop
