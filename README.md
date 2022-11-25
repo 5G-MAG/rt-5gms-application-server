@@ -37,6 +37,7 @@ Release sdist tar files can be downloaded from _TBC_.
 The source can be obtained by cloning the github repository.
 
 ```
+cd ~
 git clone --recurse-submodules https://github.com/5G-MAG/rt-5gms-application-server.git
 ```
 
@@ -45,7 +46,7 @@ git clone --recurse-submodules https://github.com/5G-MAG/rt-5gms-application-ser
 To build a Python sdist distribution tar do the following.
 
 ```
-cd rt-5gms-application-server
+cd ~/rt-5gms-application-server
 python3 -m build --sdist
 ```
 
@@ -62,7 +63,7 @@ python3 -m pip install rt-5gms-application-server-<version>.tar.gz
 Alternatively, to installing the 5GMS Application Server from the source can be done using these commands:
 
 ```
-cd rt-5gms-application-server
+cd ~/rt-5gms-application-server
 python3 -m pip install .
 ```
 
