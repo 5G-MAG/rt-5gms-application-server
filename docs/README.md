@@ -38,7 +38,7 @@ sudo apt install git wget nginx default-jdk python3-regex
 Generate the OpenAPI python modules (these are not part of the source
 distribution). Read documentation below on "Regenerating the 5G API bindings":
 ```
-cd rt-5gms-application-server
+cd ~/rt-5gms-application-server
 build_scripts/generate_5gms_as_openapi
 ```
 
@@ -67,7 +67,7 @@ mkdir /tmp/rt-5gms-as/logs
 
 Run the example directly:
 ```
-cd rt-5gms-application-server/src
+cd ~/rt-5gms-application-server/src
 python3 -m rt_5gms_as.app ../external/rt-common-shared/5gms/examples/ContentHostingConfiguration_Big-Buck-Bunny_pull-ingest.json
 ```
 
@@ -79,7 +79,7 @@ The `build_scripts/generate_5gms_as_openapi` script will use wget, git and java 
 
 Therefore to regenerate the API bindings you first need to remove the old bindings:
 ```
-cd rt-5gms-application-server
+cd ~/rt-5gms-application-server
 rm -rf src/rt_5gms_as/openapi_5g
 ```
 
