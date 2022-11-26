@@ -5,7 +5,7 @@ In this directory you will find files to assist with development and testing of
 the 5G-MAG Reference Tools 5GMS Application Server (AS).
 
 Files in this repository:
-- ATTRIBUTION_NOTICE - Project run-time attributions
+- ATTRIBUTION_NOTICE - Project run-time attributions.
 - LICENSE            - The software license for this project.
 - README.md          - Project README file.
 - pyproject.toml     - The Python project description for building and installing the application.
