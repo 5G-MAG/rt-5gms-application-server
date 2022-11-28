@@ -108,6 +108,7 @@ class M3Server:
         self.__context.appLog().info("Deleting content hosting configuration %s..."%(provisioningSessionId))
         wp = self.__context.webProxy()
         self.__context.deleteContentHostingConfiguration(provisioningSessionId)
+        await wp.purgeAll(provisioningSessionId)
         await wp.reload()
         # Do a "204 No Content" to indicate successful deletion
         raise NoProblemException(status_code=204, media_type='application/json', headers={'Location': request.url.path})
