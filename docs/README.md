@@ -5,7 +5,7 @@ In this directory you will find files to assist with development and testing of
 the 5G-MAG Reference Tools 5GMS Application Server (AS).
 
 Files in this repository:
-- ATTRIBUTION_NOTICE - Project run-time attributions
+- ATTRIBUTION_NOTICE - Project run-time attributions.
 - LICENSE            - The software license for this project.
 - README.md          - Project README file.
 - pyproject.toml     - The Python project description for building and installing the application.
@@ -30,12 +30,15 @@ Files in this repository:
 Running the example without building
 ------------------------------------
 Make sure that git, java, wget and nginx are installed on the local system and
-can be found on the current command path (`$PATH`).
+can be found on the current command path (`$PATH`):
+```
+sudo apt install git wget nginx default-jdk python3-regex
+```
 
 Generate the OpenAPI python modules (these are not part of the source
-distribution):
+distribution). Read documentation below on "Regenerating the 5G API bindings":
 ```
-cd rt-5gms-application-server
+cd ~/rt-5gms-application-server
 build_scripts/generate_5gms_as_openapi
 ```
 
@@ -64,7 +67,7 @@ mkdir /tmp/rt-5gms-as/logs
 
 Run the example directly:
 ```
-cd rt-5gms-application-server/src
+cd ~/rt-5gms-application-server/src
 python3 -m rt_5gms_as.app ../external/rt-common-shared/5gms/examples/ContentHostingConfiguration_Big-Buck-Bunny_pull-ingest.json
 ```
 
@@ -76,7 +79,7 @@ The `build_scripts/generate_5gms_as_openapi` script will use wget, git and java 
 
 Therefore to regenerate the API bindings you first need to remove the old bindings:
 ```
-cd rt-5gms-application-server
+cd ~/rt-5gms-application-server
 rm -rf src/rt_5gms_as/openapi_5g
 ```
 
