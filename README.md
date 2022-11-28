@@ -23,6 +23,13 @@ daemon that can be controlled by the AS is nginx
 * [ETSI TS 126 512](https://portal.etsi.org/webapp/workprogram/Report_WorkItem.asp?WKI_ID=66919) - 5G Media Streaming (
   5GMS): Protocols (3GPP TS 26.512 version 17.1.2 Release 17)
 
+## Install dependencies
+
+```
+sudo apt install git python3-pip python3-venv
+python3 -m pip install build
+```
+
 ## Downloading
 
 Release sdist tar files can be downloaded from _TBC_.
@@ -30,6 +37,7 @@ Release sdist tar files can be downloaded from _TBC_.
 The source can be obtained by cloning the github repository.
 
 ```
+cd ~
 git clone --recurse-submodules https://github.com/5G-MAG/rt-5gms-application-server.git
 ```
 
@@ -38,8 +46,7 @@ git clone --recurse-submodules https://github.com/5G-MAG/rt-5gms-application-ser
 To build a Python sdist distribution tar do the following.
 
 ```
-git clone --recurse-submodules https://github.com/5G-MAG/rt-5gms-application-server.git
-cd rt-5gms-application-server
+cd ~/rt-5gms-application-server
 python3 -m build --sdist
 ```
 
@@ -56,8 +63,7 @@ python3 -m pip install rt-5gms-application-server-<version>.tar.gz
 Alternatively, to installing the 5GMS Application Server from the source can be done using these commands:
 
 ```
-git clone --recurse-submodules https://github.com/5G-MAG/rt-5gms-application-server.git
-cd rt-5gms-application-server
+cd ~/rt-5gms-application-server
 python3 -m pip install .
 ```
 
