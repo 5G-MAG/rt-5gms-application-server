@@ -31,11 +31,14 @@ Running the example without building
 ------------------------------------
 Make sure that git, java, wget and nginx are installed on the local system and
 can be found on the current command path (`$PATH`).
+```
+sudo apt install git wget nginx default-jdk python3-regex
+```
 
 Generate the OpenAPI python modules (these are not part of the source
-distribution):
+distribution). Read documentation below on "Regenerating the 5G API bindings":
 ```
-cd rt-5gms-application-server
+cd ~/rt-5gms-application-server
 build_scripts/generate_5gms_as_openapi
 ```
 
@@ -64,7 +67,7 @@ mkdir /tmp/rt-5gms-as/logs
 
 Run the example directly:
 ```
-cd rt-5gms-application-server/src
+cd ~/rt-5gms-application-server/src
 python3 -m rt_5gms_as.app ../external/rt-common-shared/5gms/examples/ContentHostingConfiguration_Big-Buck-Bunny_pull-ingest.json
 ```
 
@@ -75,18 +78,18 @@ To start an HTTPS service to host the Big Buck Bunny DASH media run the https or
 
 First the certificates need to be created for localhost, e.g. (requires openssl 1.1.1 or later to be installed):
 ```
-cd rt-5gms-application-server/external/rt-common-shared/5gms
+cd ~/rt-5gms-application-server/external/rt-common-shared/5gms
 scripts/make_self_signed_certs.py examples/ContentHostingConfiguration_Big-Buck-Bunny_pull-ingest_https.json examples/Certificates.json
 ```
 
 Then the application server can be run with the ContentHostingConfiguration and matching Certificates JSON file, e.g.:
 ```
-cd rt-5gms-application-server/src
+cd ~/rt-5gms-application-server/src
 python3 -m rt_5gms_as.app ../external/rt-common-shared/5gms/examples/ContentHostingConfiguration_Big-Buck-Bunny_pull-ingest_https.json ../external/rt-common-shared/5gms/examples/Certificates.json
 ```
 ...or for both HTTP and HTTPS distributions from localhost you can use the other ContentHostingConfiguration file.
 ```
-cd rt-5gms-application-server/src
+cd ~/rt-5gms-application-server/src
 python3 -m rt_5gms_as.app ../external/rt-common-shared/5gms/examples/ContentHostingConfiguration_Big-Buck-Bunny_pull-ingest_http_and_https.json ../external/rt-common-shared/5gms/examples/Certificates.json
 ```
 
@@ -99,7 +102,7 @@ The `build_scripts/generate_5gms_as_openapi` script will use wget, git and java 
 
 Therefore to regenerate the API bindings you first need to remove the old bindings:
 ```
-cd rt-5gms-application-server
+cd ~/rt-5gms-application-server
 rm -rf src/rt_5gms_as/openapi_5g
 ```
 
