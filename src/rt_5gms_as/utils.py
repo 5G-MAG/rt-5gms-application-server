@@ -22,7 +22,13 @@ General utility functions
 '''
 
 import asyncio
+import os
+import os.path
 import subprocess
+
+from typing import Any, Callable, Awaitable
+
+__all__ = ['find_executable_on_path', 'traverse_directory_tree', 'async_create_task']
 
 def find_executable_on_path(cmd):
     '''Find an executable command on the current $PATH
@@ -40,3 +46,11 @@ def async_create_task(*args, **kwargs):
     'Wrapper for asyncio.create_task to remove unimplemented kwargs'
     allowedkwargs = {key: value for key,value in kwargs.items() if key in asyncio.create_task.__kwdefaults__}
     return asyncio.create_task(*args, **allowedkwargs)
+
+async def traverse_directory_tree(rootpath: str, filtcoro: Callable[[str,bool,Any],Awaitable[Any]], result: Any):
+    for (dirpath,dirnames,filenames) in os.walk(rootpath):
+        for dirname in dirnames:
+            result = await filtcoro(os.path.join(dirpath,dirname), True, result)
+        for filename in filenames:
+            result = await filtcoro(os.path.join(dirpath,filename), False, result)
+    return result

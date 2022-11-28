@@ -76,13 +76,13 @@ class M3Client(object):
         resp = await self.__session.send(req)
         return {'status_code': resp.status_code, 'body': resp.text, 'headers': resp.headers}
 
-    async def addCertificateFromPemFile(self, provisioning_session_id: str, certificate_id: str, pem_filename: str) -> bool:
+    async def addCertificateFromPemFile(self, certificate_id: str, pem_filename: str) -> bool:
         async with aiofiles.open(pem_filename, mode='rb') as pem_in:
             pem = await pem_in.read()
-        return await self.addCertificateFromPemData(provisioning_session_id, certificate_id, pem)
+        return await self.addCertificateFromPemData(certificate_id, pem)
 
-    async def addCertificateFromPemData(self, provisioning_session_id: str, certificate_id: str, pem: str) -> bool:
-        result = await self.__do_request('POST', '/certificates/'+provisioning_session_id+':'+certificate_id, pem, 'application/x-pem-file')
+    async def addCertificateFromPemData(self, certificate_id: str, pem: str) -> bool:
+        result = await self.__do_request('POST', '/certificates/'+certificate_id, pem, 'application/x-pem-file')
         if result['status_code'] == 201:
             self.__log.info('Certificate added successfully as %s', result['headers']['Location'])
             return True
@@ -105,18 +105,18 @@ class M3Client(object):
             else:
                 raise M3ServerException(msg, status_code=result['status_code'])
 
-    async def updateCertificateFromPemFile(self, provisioning_session_id: str, certificate_id: str, pem_filename: str) -> bool:
+    async def updateCertificateFromPemFile(self, certificate_id: str, pem_filename: str) -> bool:
         async with aiofiles.open(pem_file, mode='rb') as pem_in:
             pem = await pem_in.read()
-        return await self.updateCertificateFromPemData(provisioning_session_id, certificate_id, pem)
+        return await self.updateCertificateFromPemData(certificate_id, pem)
 
-    async def updateCertificateFromPemData(self, provisioning_session_id: str, certificate_id: str, pem: str) -> bool:
-        result = await self.__do_request('PUT', '/certificates/'+provisioning_session_id+':'+certificate_id, pem, 'application/x-pem-file')
+    async def updateCertificateFromPemData(self, certificate_id: str, pem: str) -> bool:
+        result = await self.__do_request('PUT', '/certificates/'+certificate_id, pem, 'application/x-pem-file')
         if result['status_code'] == 200:
-            self.__log.debug('Certificate %s:%s updated successfully', provisioning_session_id, certificate_id)
+            self.__log.debug('Certificate %s updated successfully', certificate_id)
             return True
         elif result['status_code'] == 204:
-            self.__log.debug('Certificate %s:%s not changed', provisioning_session_id, certificate_id)
+            self.__log.debug('Certificate %s not changed', certificate_id)
             return False
         elif result['status_code'] == 404:
             raise M3ClientException('Certificate not found!', status_code=result['status_code'])
@@ -137,8 +137,8 @@ class M3Client(object):
             else:
                 raise M3ServerException(msg, status_code=result['status_code'])
 
-    async def deleteCertificate(self, provisioning_session_id: str, certificate_id: str) -> bool:
-        result = await self.__do_request('DELETE', '/certificates/'+provisioning_session_id+':'+certificate_id, None, 'application/json')
+    async def deleteCertificate(self, certificate_id: str) -> bool:
+        result = await self.__do_request('DELETE', '/certificates/'+certificate_id, None, 'application/json')
         if result['status_code'] == 204:
             self.__log.debug('Certificate delete successfully')
             return True
@@ -212,11 +212,11 @@ class M3Client(object):
     async def updateContentHostingConfigurationFromJsonFile(self, provisioning_session_id: str, chc_file: str) -> bool:
         async with aiofiles.open(chc_file, mode='rb') as chc_in:
             chc = await chc_in.read()
-        return await self.updateContentHostingConfigurationFromJsonString(self, provisioning_session_id, chc)
+        return await self.updateContentHostingConfigurationFromJsonString(provisioning_session_id, chc)
 
     async def updateContentHostingConfigurationFromObject(self, provisioning_session_id: str, chc: dict) -> bool:
         chcstr = json.dumps(chc)
-        return await self.updateContentHostingConfigurationFromJsonString(self, provisioning_session_id, chcstr)
+        return await self.updateContentHostingConfigurationFromJsonString(provisioning_session_id, chcstr)
 
     async def updateContentHostingConfigurationFromJsonString(self, provisioning_session_id: str, chc: str) -> bool:
         result = await self.__do_request('PUT', '/content-hosting-configurations/'+provisioning_session_id, chc, 'application/json')
@@ -281,3 +281,30 @@ class M3Client(object):
                 raise M3ClientException(msg, status_code=result['status_code'])
             else:
                 raise M3ServerException(msg, status_code=result['status_code'])
+
+    async def purgeContentHostingCache(self, provisioning_session_id: str, pattern: Optional[str] = None) -> bool:
+        body = None
+        if pattern is not None:
+            body = bytes('pattern=%s'%pattern, 'utf-8')
+        result = await self.__do_request('POST', '/content-hosting-configurations/'+provisioning_session_id+'/purge', body, 'application/x-www-form-urlencoded')
+        if result['status_code'] == 204:
+            return True
+        elif result['status_code'] == 404:
+            raise M3ClientException('ContentHostingConfiguration not found!', status_code=result['status_code'])
+        elif result['status_code'] == 413:
+            raise M3ClientException('Payload too large for server, try shorter pattern.', status_code=result['status_code'])
+        elif result['status_code'] == 414:
+            raise M3ClientException('URI too long for server, try shorter provisioning session id.', status_code=result['status_code'])
+        elif result['status_code'] == 415:
+            raise M3ClientException('Unsupported media-type', status_code=result['status_code'])
+        elif result['status_code'] == 500:
+            raise M3ServerException('Internal Server Error', status_code=result['status_code'])
+        elif result['status_code'] == 503:
+            raise M3ServerException('Service Unavailable', status_code=result['status_code'])
+        else:
+            msg = 'Unknown status code, %i, from server'%result['status_code']
+            if result['status_code'] < 500:
+                raise M3ClientException(msg, status_code=result['status_code'])
+            else:
+                raise M3ServerException(msg, status_code=result['status_code'])
+

@@ -23,6 +23,7 @@ This module implements the WebProxyInterface class for the nginx web server and
 reverse proxy.
 '''
 
+import aiofiles
 import datetime
 import importlib.resources
 import os
@@ -32,8 +33,10 @@ import signal
 import subprocess
 import traceback
 
+from typing import Optional, Tuple, List, Any
+
 from ..proxy_factory import WebProxyInterface, add_web_proxy
-from ..utils import find_executable_on_path
+from ..utils import find_executable_on_path, traverse_directory_tree
 
 class NginxWebProxy(WebProxyInterface):
     '''
@@ -138,7 +141,7 @@ class NginxWebProxy(WebProxyInterface):
                 if dc.certificate_id is not None:
                     # Use nginx-server-ssl.conf.tmpl file as a template for 
                     # HTTPS server configurations.
-                    certificate_filename = self._context.getCertificateFilename(self._context.joinCertificateId(provisioning_session_id, dc.certificate_id))
+                    certificate_filename = self._context.getCertificateFilename(dc.certificate_id)
                     server_template_file = 'nginx-server-ssl.conf.tmpl'
                 else:
                     # Use nginx-server.conf.tmpl file as a template for HTTP
@@ -219,6 +222,50 @@ class NginxWebProxy(WebProxyInterface):
             if not await self.signalDaemon(signal.SIGHUP):
                 return False
         return True
+
+    async def _getCacheFilesAndKeys(self) -> List[Tuple[str,str,str]]:
+        self._context.appLog().debug('Getting NGINX cache entries...')
+        proxy_cache_path = self._context.getConfigVar('5gms_as','cache_dir')
+        result = []
+        if proxy_cache_path is not None and len(proxy_cache_path) != 0:
+            result = await traverse_directory_tree(proxy_cache_path, self.__add_cache_entry, result)
+            #self._context.appLog().debug('Entries = %r', result)
+        return result
+
+    async def _postPurgeActions(self):
+        self._context.appLog().debug('Sending HUP to NGINX...')
+        await self.signalDaemon(signal.SIGHUP)
+
+    async def __add_cache_entry(self, filename: str, isdir: bool, result: Any):
+        #self._context.appLog().debug('nginx.__add_cache_entry(%r, %r, ...)', filename, isdir)
+        if isdir:
+            return result
+        keyinfo = await self.__cache_entry_from_filename(filename)
+        #self._context.appLog().debug('nginx.__add_cache_entry: keyinfo = %r', keyinfo)
+        if keyinfo is not None:
+            result += [keyinfo]
+        return result
+
+    async def __cache_entry_from_filename(self, filename: str) -> Optional[Tuple[str,str,str]]:
+        #self._context.appLog().debug('nginx.__cache_entry_from_filename(%s)', filename)
+        try:
+            async with aiofiles.open(filename, mode='rb') as cachefile:
+                data = await cachefile.read(4096)
+            #self._context.appLog().debug('nginx.__cache_entry_from_filename: data = %r', data)
+            key_start = data.index(b'\nKEY: ')
+            #self._context.appLog().debug('nginx.__cache_entry_from_filename: key_start = %r', key_start)
+            key_end = data.index(b'\n', key_start+1)
+            #self._context.appLog().debug('nginx.__cache_entry_from_filename: key_end = %r', key_end)
+            key = data[key_start+6:key_end]
+            #self._context.appLog().debug('nginx.__cache_entry_from_filename: key = %r', key)
+            (prov_sess, urlpath) = self.__key_to_prov_sess_and_url_path(key.decode('utf-8'))
+        except Exception as err:
+            self._context.appLog().error('nginx.__cache_entry_from_filename: exception occurred: %s', str(err))
+            return None
+        return (filename, prov_sess, urlpath)
+
+    def __key_to_prov_sess_and_url_path(self, key: str) -> Tuple[str,str]:
+        return tuple(key.split(':u='))
 
     def __check_nginx_flags(self,cmd,flags):
         '''Check if the command will take the command line flags

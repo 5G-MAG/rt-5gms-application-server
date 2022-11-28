@@ -4,6 +4,7 @@
     server_name {server_names};
 
     {proxy_cache_directive}
+    proxy_cache_key "{provisioning_session_id}:u=$uri";
 
     location / {{
       return 404;

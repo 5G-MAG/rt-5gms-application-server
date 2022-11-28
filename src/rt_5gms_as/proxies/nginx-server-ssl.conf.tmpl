@@ -6,6 +6,7 @@
     ssl_certificate_key {certificate_filename};
 
     {proxy_cache_directive}
+    proxy_cache_key "{provisioning_session_id}:u=$uri";
 
     location / {{
       return 404;

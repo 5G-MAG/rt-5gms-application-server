@@ -29,5 +29,5 @@ paths:
     $ref: 'M3_ContentHostingProvisioning.yaml#/paths/~1content-hosting-configurations~1{provisioningSessionId}~1purge'
   /certificates:
     $ref: 'M3_ServerCertificatesProvisioning.yaml#/paths/~1certificates'
-  /certificates/{provisioningSessionId}:{certificateId}:
-    $ref: 'M3_ServerCertificatesProvisioning.yaml#/paths/~1certificates~1{provisioningSessionId}:{certificateId}'
+  /certificates/{afUniqueCertificateId}:
+    $ref: 'M3_ServerCertificatesProvisioning.yaml#/paths/~1certificates~1{afUniqueCertificateId}'

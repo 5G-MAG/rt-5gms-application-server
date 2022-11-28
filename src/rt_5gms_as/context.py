@@ -197,8 +197,20 @@ class Context(object):
         '''
         Add a ContentHostingConfiguration.
         '''
-        self.__addContentHostingConfiguration(provisioning_session_id, content_hosting_configuration)
+        self.__addContentHostingConfiguration(provisioning_session_id, content_hosting_configuration, force=True)
         return None
+
+    def updateContentHostingConfiguration(self, provisioning_session_id: str, content_hosting_configuration: ContentHostingConfiguration) -> Optional[bool]:
+        '''
+        Update an existing content hosting configuration
+
+        Returns None if the content hosting configuration doesn't exist,
+                True if the content hosting configuration was updated or
+                False if there was no update needed.
+        '''
+        if not self.haveContentHostingConfiguration(provisioning_session_id):
+            return None
+        return self.__addContentHostingConfiguration(provisioning_session_id, content_hosting_configuration, force=False)
 
     def deleteContentHostingConfiguration(self, provisioning_session_id: str):
         '''
@@ -267,17 +279,11 @@ class Context(object):
         '''
         return self.__config.get('5gms_as','certificates_cache')
 
-    def joinCertificateId(self, provisioning_session_id: str, certificate_id: str):
-        '''
-        Convert a provisioning-session-id and certificate-id to the combined certificate ID
-        '''
-        return provisioning_session_id+':'+certificate_id
-
     def getCertificateIds(self):
         '''
         Get a list of known certificate IDs
 
-        Returns ["<provisioning-session-id>:<certificate-id>", ...]
+        Returns ["<af-unique-certificate-id>", ...]
         '''
         return self.__certificates.keys()
 
@@ -316,11 +322,15 @@ class Context(object):
 
         # Validate the certificate IDs
         for distrib in chc.distribution_configurations:
-            if distrib.certificate_id is not None and not self.haveCertificate(self.joinCertificateId(provisioning_session_id,distrib.certificate_id)):
+            if distrib.certificate_id is not None and not self.haveCertificate(distrib.certificate_id):
                 raise Context.ConfigError('Certificate ID %s in ContentHostingConfiguration for provisioning session Id %s not found in certificates map'%(distrib.certificate_id, provisioning_session_id))
         # Update configuration
         chc_hash = self.__hashOpenAPIObject(chc)
-        if force or provisioning_session_id not in self.__provisioningSessions or chc_hash != self.__provisioning_sessions[provisioning_session_id]['chc_hash']:
+        old_chc_hash = None
+        if provisioning_session_id in self.__provisioning_sessions:
+            old_chc_hash = self.__provisioning_sessions[provisioning_session_id]['chc_hash']
+        self.__app_log.debug("CHC passed verification, checking for update: force=%r, new hash=%r, old hash=%r", force, chc_hash, old_chc_hash)
+        if force or old_chc_hash is None or chc_hash != old_chc_hash:
             self.__provisioning_sessions[provisioning_session_id] = {'chc': chc, 'chc_hash': chc_hash}
             return True
         return False
@@ -425,19 +435,17 @@ class Context(object):
             if 'chc' in provisioning_session:
                 chc = provisioning_session['chc']
                 for dc in chc['distribution_configurations']:
-                    if 'certificate_id' in dc and not self.haveCertificate(self.joinCertificateId(provisioning_session_id, dc['certificate_id'])):
-                        raise Context.ConfigError("Certificate %s not present for provisioning session %s"%(dc['certificate_id'],provisioning_session_id))
+                    if 'certificate_id' in dc and not self.haveCertificate(dc['certificate_id']):
+                        raise Context.ConfigError("Certificate %s not present"%(dc['certificate_id']))
         return True
 
     def __certificateInUse(self, certificate_id: str):
-        (provisioning_session_id, provisioning_session_certificate_id) = certificate_id.split(':')
-        if provisioning_session_id not in self.__provisioning_sessions:
-            return False
-        if 'chc' not in self.__provisioning_sessions[provisioning_session_id]:
-            return False
-        for dc in self.__provisioning_sessions[provisioning_session_id]['chc'].distribution_configurations:
-            if dc.certificate_id is not None and dc.certificate_id == provisioning_session_certificate_id:
-                return True
+        for provisioning_session in self.__provisioning_sessions.values():
+            if 'chc' not in provisioning_session:
+                continue
+            for dc in provisioning_session['chc'].distribution_configurations:
+                if dc.certificate_id is not None and dc.certificate_id == certificate_id:
+                    return True
         return False
 
     def __configFilename(self):
@@ -474,8 +482,7 @@ class Context(object):
         '''Create a consistent hash for an OpenAPI object'''
         # Just return the hash of the JSON serialization, use sort_keys=True for
         # consistency
-        #return hash(json.dumps(model_to_dict(obj), sort_keys=True))
-        return None
+        return hash(obj.json(sort_keys=True))
 
     @staticmethod
     def __hashConfigParser(config):

@@ -17,6 +17,7 @@
 from fastapi import Request
 from .exceptions import ProblemException, NoProblemException
 from .context import Context
+from typing import Tuple
 
 class M3Server:
     '''
@@ -54,6 +55,7 @@ class M3Server:
         if self.__context.haveContentHostingConfiguration(provisioningSessionId):
             raise ProblemException(status_code=405, title='ContentHostingConfiguration Already Exists', instance=request.url.path)
         # Add the configuration to the current context
+        self.__context.appLog().info("Adding content hosting configuration %s..."%(provisioningSessionId))
         try:
             self.__context.addContentHostingConfiguration(provisioningSessionId, content_hosting_configuration)
         except Context.ConfigError as err:
@@ -62,15 +64,17 @@ class M3Server:
         wp = self.__context.webProxy()
         # Start or reload the web proxy server
         if not wp.daemonRunning():
+            self.__context.appLog().info("Starting proxy daemon...")
             await wp.writeConfiguration()
             await wp.startDaemon()
         else:
+            self.__context.appLog().info("Reloading proxy daemon...")
             await wp.reload()
         # Do a "201 Created" response on success
         raise NoProblemException(status_code=201, media_type='application/json', headers={'Location': request.url.path})
 
-    async def create_server_certificate(self, provisioningSessionId, certificateId, body, request=None):
-        '''M3 Handler for "POST /3gpp-m3/v1/certificates/{provisioningSessionId}:{CertificateId}"
+    async def create_server_certificate(self, afUniqueCertificateId, body, request=None):
+        '''M3 Handler for "POST /3gpp-m3/v1/certificates/{afUniqueCertificateId}"
 
         Content-Type: application/x-pem-file
         Body contains PEM file contents (public certificate, private key and intermediate certificates)
@@ -80,12 +84,11 @@ class M3Server:
         if self.__context is None:
             raise ProblemException(status_code=500, title='Server not finished initialisation', instance=request.url.path)
         # Error 405 if we already have this certificate
-        cert_id = self.__context.joinCertificateId(provisioningSessionId,certificateId)
-        if self.__context.haveCertificate(cert_id):
+        if self.__context.haveCertificate(afUniqueCertificateId):
             raise ProblemException(status_code=405, title='Certificate Already Exists', instance=request.url.path)
         # New certificate so add it
-        self.__context.appLog().info("Adding certificate %s..."%(cert_id))
-        self.__context.addCertificate(cert_id, body)
+        self.__context.appLog().info("Adding certificate %s..."%(afUniqueCertificateId))
+        self.__context.addCertificate(afUniqueCertificateId, body)
         # Do a "201 Created" response on success
         raise NoProblemException(status_code=201, media_type='application/json', headers={'Location': request.url.path})
 
@@ -102,37 +105,49 @@ class M3Server:
         if not self.__context.haveContentHostingConfiguration(provisioningSessionId):
             raise ProblemException(status_code=404, title='ContentHostingConfiguration Not Found', instance=request.url.path)
         # Delete the ContentHostingConfiguration
+        self.__context.appLog().info("Deleting content hosting configuration %s..."%(provisioningSessionId))
         wp = self.__context.webProxy()
         self.__context.deleteContentHostingConfiguration(provisioningSessionId)
         await wp.reload()
         # Do a "204 No Content" to indicate successful deletion
         raise NoProblemException(status_code=204, media_type='application/json', headers={'Location': request.url.path})
 
-    async def destroy_server_certificate(self, provisioningSessionId, certificateId, request=None):
-        '''M3 Handler for "DELETE /3gpp-m3/v1/certificates/{provisioningSessionId}:{certificateId}"
+    async def destroy_server_certificate(self, afUniqueCertificateId, request=None):
+        '''M3 Handler for "DELETE /3gpp-m3/v1/certificates/{afUniqueCertificateId}"
 
         No request body.
         '''
         if self.__context is None:
             raise ProblemException(status_code=500, title='Server not finished initialisation', instance=request.url.path)
-        cert_id = self.__context.joinCertificateId(provisioningSessionId,certificateId)
-        if not self.__context.haveCertificate(cert_id):
+        if not self.__context.haveCertificate(afUniqueCertificateId):
             raise ProblemException(status_code=404, title='Certificate Not Found', instance=request.url.path)
-        self.__context.appLog().info("Deleting certificate %s..."%cert_id)
+        self.__context.appLog().info("Deleting certificate %s..."%afUniqueCertificateId)
         try:
-            self.__context.deleteCertificate(cert_id)
+            self.__context.deleteCertificate(afUniqueCertificateId)
         except Context.ConfigError as err:
             # Only complains if certificate is still in use
             raise ProblemException(status_code=409, title='Certificate still in use', detail=str(err), instance=request['path'])
         # Do a "204 No Content" to indicate successful deletion
         raise NoProblemException(status_code=204, media_type='application/json', headers={'Location': request.url.path})
 
-    async def purge_content_hosting_cache(self, provisioningSessionId, pattern, value, request=None):
+    async def purge_content_hosting_cache(self, provisioningSessionId, pattern, request=None):
         '''M3 Handler for "POST /3gpp-m3/v1/content-hosting-configurations/{provisioningSessionId}/purge"
 
-        Body contains ...
+        Body contains x-www-form-urlencoded with one entry:
+        pattern=<regex>
         '''
-        raise ProblemException(title='Not Implemented', status_code=501, instance=request.url.path)
+        if self.__context is None:
+            raise ProblemException(status_code=500, title='Server not finished initialisation', instance=request.url.path)
+        try:
+            if pattern is None:
+                result = await self.__context.webProxy().purgeAll(provisioningSessionId)
+            else:
+                result = await self.__context.webProxy().purgeUsingRegex(provisioningSessionId, pattern)
+        except Exception as err:
+            raise ProblemException(title='Internal Error', status_code=500, instance=request.url.path, detail='Exception while purging content: '+str(err))
+        if result is True:
+            raise NoProblemException(status_code=204)
+        raise NoProblemException(status_code=200)
 
     async def retrieve_content_hosting_configurations(self, request=None):
         '''M3 Handler for "POST /3gpp-m3/v1/content-hosting-configurations"
@@ -170,19 +185,22 @@ class M3Server:
         '''
         if self.__context is None:
             raise ProblemException(status_code=500, title='Server not finished initialisation', instance=request['path'])
-        old_chc = self.__context.getContentHostingConfiguration(provisioningSessionId)
+        old_chc = self.__context.findContentHostingConfigurationByProvisioningSession(provisioningSessionId)
         if old_chc is None:
             raise ProblemException(status_code=404, title='ContentHostingConfiguration Not Found', instance=request.url.path)
         if old_chc == content_hosting_configuration:
             raise ProblemException(status_code=204, title='ContentHostingConfiguration Unchanged', instance=request.url.path)
+        self.__context.appLog().info("Updating content hosting configuration %s..."%(provisioningSessionId))
         try:
-            self.__context.setContentHostingConfiguration(provisioningSessionId, content_hosting_configuration)
+            if self.__context.updateContentHostingConfiguration(provisioningSessionId, content_hosting_configuration) is not True:
+                self.__context.appLog().error("Assertion: content hosting configuration updated failed!")
+                raise ProblemException(status_code=500, title='Internal Server Error', detail='Assertion Error: ContentHostingConfiguration not updated when an update expected', instance=request.url.path)
         except Context.ConfigError as err:
             raise ProblemException(status_code=415, title='Error in ContentHostingConfiguration', detail=str(err), instance=request.url.path)
         await self.__context.webProxy().reload()
 
-    async def update_server_certificate(self, provisioningSessionId, certificateId, body, request=None):
-        '''M3 Handler for "PUT /3gpp-m3/v1/certificates/{provisioningSessionId}:{certificateId}"
+    async def update_server_certificate(self, afUniqueCertificateId, body, request=None):
+        '''M3 Handler for "PUT /3gpp-m3/v1/certificates/{afUniqueCertificateId}"
 
         Content-Type: application/x-pem-file
         Body contains PEM file contents (public certificate, private key and intermediate certificates).
@@ -192,12 +210,11 @@ class M3Server:
         if self.__context is None:
             raise ProblemException(status_code=500, title='Server not finished initialisation', instance=request['path'])
         # Check if the certificate is available for update
-        cert_id = self.__context.joinCertificateId(provisioningSessionId,certificateId)
-        if not self.__context.haveCertificate(cert_id):
+        if not self.__context.haveCertificate(afUniqueCertificateId):
             raise ProblemException(status_code=404, title='Server Certificate Not Found', instance=request['path'])
         # Update the certificate
-        self.__context.appLog().info("Attempting to update certificate %s..."%(cert_id))
-        if not self.__context.updateCertificate(cert_id, body):
+        self.__context.appLog().info("Attempting to update certificate %s..."%(afUniqueCertificateId))
+        if not self.__context.updateCertificate(afUniqueCertificateId, body):
             raise NoProblemException(status_code=204, media_type='application/json')
         # Certificate changed, reload proxy server to pick up new cert
         await self.__context.webProxy().reload()
