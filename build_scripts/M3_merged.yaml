@@ -3,7 +3,7 @@ info:
   title: M3_merged
   version: 0.0.0
   description: |
-    5GMS AS M3 API
+    Prototype 5GMS AS M3 API
     Copyright © 2022 British Broadcasting Corporation
     All rights reserved.
 tags:
@@ -12,8 +12,8 @@ tags:
   - name: M3_ServerCertificatesProvisioning
     description: '5G Media Streaming: Application Server Provisioning (M3) APIs: Server Certificates Provisioning'
 externalDocs:
-  description: 'TS 26.512 V16.x.x; 5G Media Streaming (5GMS); Protocols'
-  url: 'https://www.3gpp.org/ftp/Specs/archive/26_series/26.512/'
+  description: 'Define M3 APIs · Issue #12 · 5G-MAG/rt-common-shared'
+  url: 'https://github.com/5G-MAG/rt-common-shared/issues/12'
 servers:
   - url: '{apiRoot}/3gpp-m3/v1'
     variables:
