@@ -152,7 +152,7 @@ async def __app(context):
     server.setContext(context)
 
     m3_app = FastAPI(title='5G-MAG M3', description='5GMS AS M3 API Copyright © 2022 British Broadcasting Corporation All rights reserved.', version='0.0.0', debug=False, default_response_class=AppJSONResponse)
-    #m3_app.debug = True
+    m3_app.debug = True
 
     @m3_app.exception_handler(ProblemException)
     async def problem_exception_handler(request, exc):
@@ -171,7 +171,7 @@ async def __app(context):
     # Create HTTP server to handle M3 interface and add task to main loop
     m3_app.include_router(m3_router, prefix="/3gpp-m3/v1")
 
-    m3_config = hypercorn.Config.from_mapping(include_server_header=False, bind=context.getConfigVar('5gms_as','m3_listen')+':'+context.getConfigVar('5gms_as','m3_port'), loglevel='WARNING')
+    m3_config = hypercorn.Config.from_mapping(include_server_header=False, bind=context.getConfigVar('5gms_as','m3_listen')+':'+context.getConfigVar('5gms_as','m3_port'), loglevel='DEBUG', accesslog='-', errorlog='-')
     m3_serve_task = async_create_task(hypercorn.asyncio.serve(m3_app, m3_config), name='M3-server')
 
     # Main application loop

@@ -34,6 +34,7 @@ import subprocess
 import traceback
 
 from typing import Optional, Tuple, List, Any
+from urllib.parse import urlparse
 
 from ..proxy_factory import WebProxyInterface, add_web_proxy
 from ..utils import find_executable_on_path, traverse_directory_tree
@@ -107,7 +108,6 @@ class NginxWebProxy(WebProxyInterface):
         fastcgi_temp_path = self._context.getConfigVar('5gms_as.nginx','fastcgi_temp')
         uwsgi_temp_path = self._context.getConfigVar('5gms_as.nginx','uwsgi_temp')
         scgi_temp_path = self._context.getConfigVar('5gms_as.nginx','scgi_temp')
-        m4d_path_prefix_format = self._context.getConfigVar('5gms_as','m4d_path_prefix')
         # Create caching directives if we have a cache dir configured
         proxy_cache_path_directive = ''
         proxy_cache_directive = ''
@@ -117,15 +117,23 @@ class NginxWebProxy(WebProxyInterface):
         # Create the server configurations from the CHCs
         server_configs=''
         for provisioning_session_id in self._context.getProvisioningSessionIds():
-            m4d_path_prefix = m4d_path_prefix_format.format(provisioningSessionId=provisioning_session_id)
             i = self._context.findContentHostingConfigurationByProvisioningSession(provisioning_session_id)
             if not i.ingest_configuration.pull or i.ingest_configuration.protocol != 'urn:3gpp:5gms:content-protocol:http-pull-ingest':
                 self.log.error("Can only handle http-pull-ingest sources at present")
                 return False
-            downstream_origin=i.ingest_configuration.entry_point
+            downstream_origin = i.ingest_configuration.base_url
+            if downstream_origin is None:
+                self.log.error("Configuration must have an ingestConfiguration.baseURL")
+                return False
             if downstream_origin[-1] == '/':
                 downstream_origin = downstream_origin[:-1]
             for dc in i.distribution_configurations:
+                base_url = urlparse(dc.base_url)
+                m4d_path_prefix = base_url.path
+                if m4d_path_prefix[0] != '/':
+                    m4d_path_prefix = '/' + m4d_path_prefix
+                if m4d_path_prefix[-1] != '/':
+                    m4d_path_prefix += '/'
                 rewrite_rules=''
                 if dc.path_rewrite_rules is not None:
                     for rr in dc.path_rewrite_rules:

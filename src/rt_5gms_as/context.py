@@ -52,7 +52,6 @@ m3_port = 7777
 access_log = %(log_dir)s/application-server-access.log
 error_log = %(log_dir)s/application-server-error.log
 pid_path = %(run_dir)s/application-server.pid
-m4d_path_prefix = /m4d/provisioning-session-{provisioningSessionId}/
 
 [5gms_as.nginx]
 root_temp = /var/cache/rt-5gms/as
