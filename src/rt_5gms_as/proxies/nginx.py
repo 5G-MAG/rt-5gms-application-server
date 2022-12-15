@@ -33,11 +33,169 @@ import signal
 import subprocess
 import traceback
 
-from typing import Optional, Tuple, List, Any
+from typing import Optional, Tuple, List, Any, Self, Set
 from urllib.parse import urlparse
 
 from ..proxy_factory import WebProxyInterface, add_web_proxy
 from ..utils import find_executable_on_path, traverse_directory_tree
+from ..context import Context
+
+class NginxLocationConfig(object):
+    '''
+    Class to hold and compare location configurations
+    '''
+    def __init__(self: Self, context: Context, path_prefix: str, downstream_prefix_url: str, provisioning_session: str) -> Self:
+        self.__context: Context = context
+        self.path_prefix: str = path_prefix
+        self.downstream_prefix_url: str = downstream_prefix_url
+        self.provisioning_session: str = provisioning_session
+        self.rewrite_rules: List[Tuple[str,str]] = []
+
+    def addRewriteRule(self: Self, request_path_pattern: str, mapped_path: str) -> bool:
+        (regex, replace) = self.__transform_rewrite_rules(request_path_pattern,mapped_path)
+        if regex is None:
+            self.__context.appLog().error("Unsafe or invalid rewrite rule: %s => %s", request_path_pattern, mapped_path)
+            return False
+        self.rewrite_rules += [(regex, replace)]
+        return True
+
+    def __eq__(self: Self, other: "NginxLocationConfig") -> bool:
+        if self.path_prefix != other.path_prefix:
+            return False
+        if len(self.rewrite_rules) != len(other.rewrite_rules):
+            return False
+        for a in self.rewrite_rules:
+            if a not in other.rewrite_rules:
+                return False
+        return True
+
+    def __ne__(self: Self, other: "NginxLocationConfig") -> bool:
+        return not self == other
+
+    async def config(self: Self, indent: int = 0) -> str:
+        prefix = ' ' * indent
+        ret = prefix + 'location ~ ^%s {\n'%(self.path_prefix)
+        for (regex, replace) in self.rewrite_rules:
+            ret += prefix + '  rewrite "%s" "%s" break;\n'
+        ret += prefix + '  proxy_cache_key "%s:u=$uri";\n'%self.provisioning_session
+        ret += prefix + '  proxy_pass %s;\n'%self.downstream_prefix_url
+        ret += prefix + '}\n'
+        return ret
+
+    def __transform_rewrite_rules(self, rule_regex, replace):
+        '''Modify the rewrite rule to work in nginx
+
+        Checks the regex for bracketed expressions, apply any ECMA regex to
+        nginx (perl) regex syntax changes and add a suffix catchall and replace
+        for the basename component of the URL.
+
+        Returns the modified regex and replacement strings.
+        '''
+        # Note: ECMA RegExp and Perl regex (as used by nginx) syntax are
+        #       compatible, ECMA appears to be a subset of Perl. Therefore the
+        #       regex shouldn't need any transformation.
+
+        # Python regex uses Perl like syntax so check the regex by compiling in
+        # Python.
+        try:
+            compiled_regex = regex.compile(rule_regex)
+        except regex.error as e:
+            self.__context.appLog().error("Error in request_pattern: %s", traceback.format_exc())
+            return (None,None)
+
+        # Get number of bracketed expressions for back-references from regex
+        brackets = compiled_regex.groups
+
+        # pathRewriteRule only deals with replacing a path part, so we need to
+        # include the rest of the URL path in the nginx rewrite rule.
+        if rule_regex[0] != '^':
+            rule_regex = '^(.*)' + rule_regex
+            replace = '${1}' + replace
+            brackets += 1
+        if rule_regex[-1] != '$':
+            rule_regex = rule_regex + '([^?#]*/)?'
+            replace = replace + '$%i'%(brackets+1)
+            brackets += 1
+        else:
+            # remove '$' as we need to match entire URL path in nginx
+            rule_regex = rule_regex[:-1]
+        rule_regex = rule_regex + '([^/]*(?:#[^?/]*)?(?:\\?.*)?)$'
+        replace = replace + '$%i'%(brackets+1)
+
+        return (rule_regex, replace)
+
+class NginxServerConfig(object):
+    '''
+    Class to hold and compare server configurations
+    '''
+    def __init__(self: Self, context: Context, hostnames: Set[str], use_cache: bool = False, certfile: Optional[str] = None) -> Self:
+        self.__context: Context = context
+        self.hostnames: Set[str] = hostnames
+        self.certificate_file: Optional[str] = certfile
+        if certfile is not None:
+            self.port: int = int(self.__context.getConfigVar('5gms_as','https_port'))
+        else:
+            self.port: int = int(self.__context.getConfigVar('5gms_as','http_port'))
+        self.locations: List[NginxLocationConfig] = []
+        self.use_cache: bool = use_cache
+
+    async def config(self: Self, indent: int = 0) -> str:
+        prefix = ' ' * indent
+        ret  = prefix + 'server {\n'
+        ret += prefix + '  listen %i;\n'%self.port
+        ret += prefix + '  listen [::]:%i;\n'%self.port
+        ret += prefix + '  server_name %s;\n'%(' '.join(self.hostnames))
+        ret += '\n'
+        if self.certificate_file is not None:
+            ret += prefix + '  ssl_certificate %s;\n'%self.certificate_file
+            ret += prefix + '  ssl_certificate_key %s;\n'%self.certificate_file
+            ret += '\n'
+        if self.use_cache:
+            ret += prefix + '  proxy_cache cacheone;\n'
+            ret += '\n'
+        ret += prefix + '  location / {\n'
+        ret += prefix + '    return 404;\n'
+        ret += prefix + '  }\n'
+        ret += '\n'
+        for locn in self.locations:
+            ret += await locn.config(indent+2)
+            ret += '\n'
+        ret += prefix + '  error_page 404 /404.html;\n'
+        ret += prefix + '  location = /404.html {\n'
+        ret += prefix + '  }\n'
+        ret += '\n'
+        ret += prefix + '  error_page 500 502 503 504 /50x.html;\n'
+        ret += prefix + '  location = /50x.html {\n'
+        ret += prefix + '  }\n'
+        ret += prefix + '}\n'
+        return ret
+
+    def addLocation(self: Self, locn: NginxLocationConfig) -> None:
+        self.locations += [locn]
+
+    def sameLocations(self: Self, other: "NginxServerConfig") -> bool:
+        if len(self.locations) != len(other.locations):
+            return False
+        for a in self.locations:
+            if a not in other.locations:
+                return False
+        return True
+
+    def mergeServer(self: Self, other: "NginxServerConfig") -> bool:
+        if self.use_cache != other.use_cache:
+            return False
+        if self.certificate_file is None and other.certificate_file is not None:
+            return False
+        if self.certificate_file is not None and other.certificate_file is None:
+            return False
+        if self.certificate_file is not None and other.certificate_file != self.certificate_file:
+            return False
+        if self.port != other.port:
+            return False
+        if not self.sameLocations(other):
+            return False
+        self.hostnames.update(other.hostnames)
+        return True
 
 class NginxWebProxy(WebProxyInterface):
     '''
@@ -98,7 +256,6 @@ class NginxWebProxy(WebProxyInterface):
                file.
         '''
         http_port = self._context.getConfigVar('5gms_as','http_port')
-        https_port = self._context.getConfigVar('5gms_as','https_port')
         error_log_path = self._context.getConfigVar('5gms_as','error_log')
         access_log_path = self._context.getConfigVar('5gms_as','access_log')
         pid_path = self._context.getConfigVar('5gms_as.nginx','pid_path')
@@ -110,12 +267,10 @@ class NginxWebProxy(WebProxyInterface):
         scgi_temp_path = self._context.getConfigVar('5gms_as.nginx','scgi_temp')
         # Create caching directives if we have a cache dir configured
         proxy_cache_path_directive = ''
-        proxy_cache_directive = ''
         if proxy_cache_path is not None and len(proxy_cache_path) > 0:
             proxy_cache_path_directive = 'proxy_cache_path %s levels=1:2 use_temp_path=on keys_zone=cacheone:10m;'%proxy_cache_path
-            proxy_cache_directive = 'proxy_cache cacheone;'
         # Create the server configurations from the CHCs
-        server_configs=''
+        server_configs: Dict[Tuple[str,bool], NginxServerConfig] = {}
         for provisioning_session_id in self._context.getProvisioningSessionIds():
             i = self._context.findContentHostingConfigurationByProvisioningSession(provisioning_session_id)
             if not i.ingest_configuration.pull or i.ingest_configuration.protocol != 'urn:3gpp:5gms:content-protocol:http-pull-ingest':
@@ -128,36 +283,45 @@ class NginxWebProxy(WebProxyInterface):
             if downstream_origin[-1] == '/':
                 downstream_origin = downstream_origin[:-1]
             for dc in i.distribution_configurations:
+                certificate_filename = None
+                if dc.certificate_id is not None:
+                    certificate_filename = self._context.getCertificateFilename(dc.certificate_id)
+                sk = (dc.canonical_domain_name, certificate_filename is not None)
+                if sk not in server_configs:
+                    server_configs[sk] = NginxServerConfig(self._context, {dc.canonical_domain_name}, proxy_cache_path is not None, certificate_filename)
+                if dc.domain_name_alias is not None and dc.domain_name_alias not in server_configs:
+                    server_configs[(dc.domain_name_alias, certificate_filename is not None)] = NginxServerConfig(self._context, {dc.domain_name_alias}, proxy_cache_path is not None, certificate_filename)
                 base_url = urlparse(dc.base_url)
                 m4d_path_prefix = base_url.path
                 if m4d_path_prefix[0] != '/':
                     m4d_path_prefix = '/' + m4d_path_prefix
                 if m4d_path_prefix[-1] != '/':
                     m4d_path_prefix += '/'
-                rewrite_rules=''
+                locn = NginxLocationConfig(self._context, m4d_path_prefix, downstream_origin, provisioning_session_id)
                 if dc.path_rewrite_rules is not None:
                     for rr in dc.path_rewrite_rules:
-                        (regex, replace) = self.__transform_rewrite_rules(rr.request_pattern,rr.mapped_path)
-                        if regex is not None:
-                            rewrite_rules += '      rewrite "%s" "%s" break;\n'%(regex,replace)
-                        else:
-                            self.log.error("Unsafe or invalid rewrite rule: %s => %s", rr.request_pattern, rr.mapped_path)
+                        if not locn.addRewriteRule(rr.request_path_pattern, rr.mapped_path):
                             return False
-                server_names = dc.canonical_domain_name
+                server_configs[sk].addLocation(locn)
                 if dc.domain_name_alias is not None:
-                    server_names += ' ' + dc.domain_name_alias
-                if dc.certificate_id is not None:
-                    # Use nginx-server-ssl.conf.tmpl file as a template for 
-                    # HTTPS server configurations.
-                    certificate_filename = self._context.getCertificateFilename(dc.certificate_id)
-                    server_template_file = 'nginx-server-ssl.conf.tmpl'
-                else:
-                    # Use nginx-server.conf.tmpl file as a template for HTTP
-                    # server configurations.
-                    server_template_file = 'nginx-server.conf.tmpl'
-                with importlib.resources.open_text(__package__, server_template_file) as template:
-                    for line in template:
-                        server_configs += line.format(**locals())
+                    server_configs[(dc.domain_name_alias, certificate_filename is not None)].addLocation(locn)
+        changed = True
+        while changed:
+            changed = False
+            keys = list(server_configs.keys())
+            for i in range(len(keys)):
+                if changed:
+                    break
+                for j in range(i+1, len(keys)):
+                    if server_configs[keys[i]].mergeServer(server_configs[keys[j]]):
+                        changed = True
+                        del server_configs[keys[j]]
+                        break
+        config = ''
+        for svr in server_configs.values():
+            config += await svr.config(2)
+            config += '\n'
+        server_configs = config
         try:
             # Try to write out the configuration file using nginx.conf.tmpl as
             # a template for the configuration file.
@@ -292,48 +456,6 @@ class NginxWebProxy(WebProxyInterface):
                         if value is not None:
                             args += [value]
         return args
-
-    def __transform_rewrite_rules(self, rule_regex, replace):
-        '''Modify the rewrite rule to work in nginx
-
-        Checks the regex for bracketed expressions, apply any ECMA regex to
-        nginx (perl) regex syntax changes and add a suffix catchall and replace
-        for the basename component of the URL.
-
-        Returns the modified regex and replacement strings.
-        '''
-        # Note: ECMA RegExp and Perl regex (as used by nginx) syntax are
-        #       compatible, ECMA appears to be a subset of Perl. Therefore the
-        #       regex shouldn't need any transformation.
-
-        # Python regex uses Perl like syntax so check the regex by compiling in
-        # Python.
-        try:
-            compiled_regex = regex.compile(rule_regex)
-        except regex.error as e:
-            self.log.error("Error in request_pattern: %s", traceback.format_exc())
-            return (None,None)
-
-        # Get number of bracketed expressions for back-references from regex
-        brackets = compiled_regex.groups
-
-        # pathRewriteRule only deals with replacing a path part, so we need to
-        # include the rest of the URL path in the nginx rewrite rule.
-        if rule_regex[0] != '^':
-            rule_regex = '^(.*)' + rule_regex
-            replace = '${1}' + replace
-            brackets += 1
-        if rule_regex[-1] != '$':
-            rule_regex = rule_regex + '([^?#]*/)?'
-            replace = replace + '$%i'%(brackets+1)
-            brackets += 1
-        else:
-            # remove '$' as we need to match entire URL path in nginx
-            rule_regex = rule_regex[:-1]
-        rule_regex = rule_regex + '([^/]*(?:#[^?/]*)?(?:\\?.*)?)$'
-        replace = replace + '$%i'%(brackets+1)
-
-        return (rule_regex, replace)
 
 # Register as a WebProxyInterface class with highest priority
 add_web_proxy(NginxWebProxy,1)
