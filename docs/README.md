@@ -30,7 +30,8 @@ Files in this repository:
     - proxy_factory.py - Factory module to pick a suitable web server/proxy.
     - server.py - M3 Server implementation.
     - utils.py - Common utility functions for the web server/proxy classes.
-- tests/             - Regression and build acceptance tests.
+- tests/             - Regression and build acceptance tests and other testing tools.
+  - examples/ - Example configurations to go along with the tests.
 
 Running the example without building
 ------------------------------------
@@ -140,7 +141,7 @@ Options:
 
 ```bash
 cd ~/rt-5gms-application-server
-tests/m3_client_cli.py -H localhost:7777 add ps1 external/rt-common-shared/5gms/examples/ContentHostingConfiguration_Big-Buck-Bunny_pull-ingest.json
+tests/m3_client_cli.py -H localhost:7777 add ps1 tests/examples/ContentHostingConfiguration_Big-Buck-Bunny_pull-ingest.json
 ```
 This should respond with a "Success!" message, and NGINX should now be running on port 8080 using the example Big Buck Bunny configuration. You can check the NGINX configuration in `/tmp/rt_5gms_as.conf`.
 
@@ -151,7 +152,7 @@ This requires that the server certificate is pushed to the Application Server be
 To generate server certificates, ensure that openssl is installed (e.g. `apt -y install openssl`), and then:
 ```bash
 cd ~/rt-5gms-application-server
-external/rt-common-shared/5gms/scripts/make_self_signed_certs.py external/rt-common-shared/5gms/examples/ContentHostingConfiguration_Big-Buck-Bunny_pull-ingest_https.json external/rt-common-shared/5gms/examples/Certificates.json
+external/rt-common-shared/5gms/scripts/make_self_signed_certs.py tests/examples/ContentHostingConfiguration_Big-Buck-Bunny_pull-ingest_https.json tests/examples/Certificates.json
 ```
 
 The 5GMS Application Server stores the certificates it has been configured with in a certificates cache. This cache is reloaded when the Application Server starts up, so it will remember certificates from previous runs.
@@ -165,29 +166,29 @@ tests/m3_client_cli.py -c localhost:7777
 To push a new certificate (with id "testcert1" using the generated certificate file):
 ```bash
 cd ~/rt-5gms-application-server
-tests/m3_client_cli.py -c localhost:7777 add testcert1 external/rt-common-shared/5gms/examples/certificate-1.pem
+tests/m3_client_cli.py -c localhost:7777 add testcert1 tests/examples/certificate-1.pem
 ```
 
 ...or to update an existing certificate:
 ```bash
 cd ~/rt-5gms-application-server
-tests/m3_client_cli.py -c localhost:7777 update testcert1 external/rt-common-shared/5gms/examples/certificate-1.pem
+tests/m3_client_cli.py -c localhost:7777 update testcert1 tests/examples/certificate-1.pem
 ```
 
 Now the Content Hosting Configuration can be pushed:
 ```bash
 cd ~/rt-5gms-application-server
-tests/m3_client_cli.py -H localhost:7777 add ps1 external/rt-common-shared/5gms/examples/ContentHostingConfiguration_Big-Buck-Bunny_pull-ingest_https.json
+tests/m3_client_cli.py -H localhost:7777 add ps1 tests/examples/ContentHostingConfiguration_Big-Buck-Bunny_pull-ingest_https.json
 ```
 This should result in "Success!" and NGINX will now be listening on "https://localhost:8443/...".
 
-To start both HTTPS and HTTP reverse proxies for the Big Buck Bunny content, substitute the ContentHostingConfiguration above for the `external/rt-common-shared/5gms/examples/ContentHostingConfiguration_Big-Buck-Bunny_pull-ingest_http_and_https.json` file, or update the configuration using:
+To start both HTTPS and HTTP reverse proxies for the Big Buck Bunny content, substitute the ContentHostingConfiguration above for the `tests/examples/ContentHostingConfiguration_Big-Buck-Bunny_pull-ingest_http_and_https.json` file, or update the configuration using:
 ```bash
 cd ~/rt-5gms-application-server
-tests/m3_client_cli.py -H localhost:7777 update ps1 external/rt-common-shared/5gms/examples/ContentHostingConfiguration_Big-Buck-Bunny_pull-ingest_http_and_https.json
+tests/m3_client_cli.py -H localhost:7777 update ps1 tests/examples/ContentHostingConfiguration_Big-Buck-Bunny_pull-ingest_http_and_https.json
 ```
 
-Note: Following these instructions will create a self-signed certificate for localhost in `~/rt-5gms-application-server/external/rt-common-shared/5gms/examples/certificate-1.pem`, this certificate will not pass normal CA verification so to access the URL you need to turn off SSL validation or accept the self-signed certificate in your browser or media player application.
+Note: Following these instructions will create a self-signed certificate for localhost in `~/rt-5gms-application-server/tests/examples/certificate-1.pem`, this certificate will not pass normal CA verification so to access the URL you need to turn off SSL validation or accept the self-signed certificate in your browser or media player application.
 
 Regenerating the 5G API bindings
 --------------------------------
