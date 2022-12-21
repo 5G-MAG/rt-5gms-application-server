@@ -142,8 +142,11 @@ class NginxServerConfig(object):
     async def config(self: Self, indent: int = 0) -> str:
         prefix = ' ' * indent
         ret  = prefix + 'server {\n'
-        ret += prefix + '  listen %i;\n'%self.port
-        ret += prefix + '  listen [::]:%i;\n'%self.port
+        ssl_flag = ''
+        if self.certificate_file is not None:
+            ssl_flag = ' ssl'
+        ret += prefix + '  listen %i%s;\n'%(self.port, ssl_flag)
+        ret += prefix + '  listen [::]:%i%s;\n'%(self.port, ssl_flag)
         ret += prefix + '  server_name %s;\n'%(' '.join(self.hostnames))
         ret += '\n'
         if self.certificate_file is not None:
@@ -270,7 +273,7 @@ class NginxWebProxy(WebProxyInterface):
         if proxy_cache_path is not None and len(proxy_cache_path) > 0:
             proxy_cache_path_directive = 'proxy_cache_path %s levels=1:2 use_temp_path=on keys_zone=cacheone:10m;'%proxy_cache_path
         # Create the server configurations from the CHCs
-        server_configs: Dict[Tuple[str,bool], NginxServerConfig] = {}
+        server_configs: Dict[Tuple[str,Optional[str]], NginxServerConfig] = {}
         for provisioning_session_id in self._context.getProvisioningSessionIds():
             i = self._context.findContentHostingConfigurationByProvisioningSession(provisioning_session_id)
             if not i.ingest_configuration.pull or i.ingest_configuration.protocol != 'urn:3gpp:5gms:content-protocol:http-pull-ingest':
@@ -286,7 +289,7 @@ class NginxWebProxy(WebProxyInterface):
                 certificate_filename = None
                 if dc.certificate_id is not None:
                     certificate_filename = self._context.getCertificateFilename(dc.certificate_id)
-                sk = (dc.canonical_domain_name, certificate_filename is not None)
+                sk = (dc.canonical_domain_name, certificate_filename)
                 if sk not in server_configs:
                     server_configs[sk] = NginxServerConfig(self._context, {dc.canonical_domain_name}, proxy_cache_path is not None, certificate_filename)
                 if dc.domain_name_alias is not None and dc.domain_name_alias not in server_configs:
