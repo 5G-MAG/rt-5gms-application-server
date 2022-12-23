@@ -74,7 +74,7 @@ class NginxLocationConfig(object):
 
     async def config(self, indent: int = 0) -> str:
         prefix = ' ' * indent
-        ret = prefix + 'location ~ ^%s {\n'%(self.path_prefix)
+        ret = prefix + 'location %s {\n'%(self.path_prefix)
         for (regex, replace) in self.rewrite_rules:
             ret += prefix + '  rewrite "%s" "%s" break;\n'
         ret += prefix + '  proxy_cache_key "%s:u=$uri";\n'%self.provisioning_session
@@ -156,13 +156,13 @@ class NginxServerConfig(object):
         if self.use_cache:
             ret += prefix + '  proxy_cache cacheone;\n'
             ret += '\n'
+        for locn in self.locations:
+            ret += await locn.config(indent+2)
+            ret += '\n'
         ret += prefix + '  location / {\n'
         ret += prefix + '    return 404;\n'
         ret += prefix + '  }\n'
         ret += '\n'
-        for locn in self.locations:
-            ret += await locn.config(indent+2)
-            ret += '\n'
         ret += prefix + '  error_page 404 /404.html;\n'
         ret += prefix + '  location = /404.html {\n'
         ret += prefix + '  }\n'
