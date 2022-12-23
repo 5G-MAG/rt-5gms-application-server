@@ -137,6 +137,21 @@ Options:
                              List known ContentHostingConfigurations or perform an operation on ContentHostingConfigurations.
 ```
 
+### Prerequisite packages
+
+These testing scripts require a few more Python 3 modules to be installed, beyond what is brought in as requirements when the when the application server is installed.
+
+The extra modules are: `docopt`, `aiofiles` and `httpx[http2]`.
+
+These can be installed on ubuntu using:
+```bash
+apt install python3-docopt python3-aiofiles python3-httpx python3-h2
+```
+...or on most distributions by using the python `pip` module:
+```
+python3 -m pip install docopt aiofiles 'httpx[http2]'
+```
+
 ### To configure a simple HTTP Application Server
 
 ```bash
@@ -149,7 +164,7 @@ This should respond with a "Success!" message, and NGINX should now be running o
 
 This requires that the server certificate is pushed to the Application Server before the content hosting configuration is.
 
-To generate server certificates, ensure that openssl is installed (e.g. `apt -y install openssl`), and then:
+To generate server certificates, ensure that `openssl` is installed (e.g. `apt -y install openssl`), and then:
 ```bash
 cd ~/rt-5gms-application-server
 external/rt-common-shared/5gms/scripts/make_self_signed_certs.py tests/examples/ContentHostingConfiguration_Big-Buck-Bunny_pull-ingest_https.json tests/examples/Certificates.json
