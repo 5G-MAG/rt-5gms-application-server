@@ -33,7 +33,7 @@ import signal
 import subprocess
 import traceback
 
-from typing import Optional, Tuple, List, Any, Self, Set
+from typing import Optional, Tuple, List, Any, Set
 from urllib.parse import urlparse
 
 from ..proxy_factory import WebProxyInterface, add_web_proxy
@@ -44,14 +44,14 @@ class NginxLocationConfig(object):
     '''
     Class to hold and compare location configurations
     '''
-    def __init__(self: Self, context: Context, path_prefix: str, downstream_prefix_url: str, provisioning_session: str) -> Self:
+    def __init__(self, context: Context, path_prefix: str, downstream_prefix_url: str, provisioning_session: str):
         self.__context: Context = context
         self.path_prefix: str = path_prefix
         self.downstream_prefix_url: str = downstream_prefix_url
         self.provisioning_session: str = provisioning_session
         self.rewrite_rules: List[Tuple[str,str]] = []
 
-    def addRewriteRule(self: Self, request_path_pattern: str, mapped_path: str) -> bool:
+    def addRewriteRule(self, request_path_pattern: str, mapped_path: str) -> bool:
         (regex, replace) = self.__transform_rewrite_rules(request_path_pattern,mapped_path)
         if regex is None:
             self.__context.appLog().error("Unsafe or invalid rewrite rule: %s => %s", request_path_pattern, mapped_path)
@@ -59,7 +59,7 @@ class NginxLocationConfig(object):
         self.rewrite_rules += [(regex, replace)]
         return True
 
-    def __eq__(self: Self, other: "NginxLocationConfig") -> bool:
+    def __eq__(self, other: "NginxLocationConfig") -> bool:
         if self.path_prefix != other.path_prefix:
             return False
         if len(self.rewrite_rules) != len(other.rewrite_rules):
@@ -69,10 +69,10 @@ class NginxLocationConfig(object):
                 return False
         return True
 
-    def __ne__(self: Self, other: "NginxLocationConfig") -> bool:
+    def __ne__(self, other: "NginxLocationConfig") -> bool:
         return not self == other
 
-    async def config(self: Self, indent: int = 0) -> str:
+    async def config(self, indent: int = 0) -> str:
         prefix = ' ' * indent
         ret = prefix + 'location ~ ^%s {\n'%(self.path_prefix)
         for (regex, replace) in self.rewrite_rules:
@@ -128,7 +128,7 @@ class NginxServerConfig(object):
     '''
     Class to hold and compare server configurations
     '''
-    def __init__(self: Self, context: Context, hostnames: Set[str], use_cache: bool = False, certfile: Optional[str] = None) -> Self:
+    def __init__(self, context: Context, hostnames: Set[str], use_cache: bool = False, certfile: Optional[str] = None):
         self.__context: Context = context
         self.hostnames: Set[str] = hostnames
         self.certificate_file: Optional[str] = certfile
@@ -139,7 +139,7 @@ class NginxServerConfig(object):
         self.locations: List[NginxLocationConfig] = []
         self.use_cache: bool = use_cache
 
-    async def config(self: Self, indent: int = 0) -> str:
+    async def config(self, indent: int = 0) -> str:
         prefix = ' ' * indent
         ret  = prefix + 'server {\n'
         ssl_flag = ''
@@ -173,10 +173,10 @@ class NginxServerConfig(object):
         ret += prefix + '}\n'
         return ret
 
-    def addLocation(self: Self, locn: NginxLocationConfig) -> None:
+    def addLocation(self, locn: NginxLocationConfig) -> None:
         self.locations += [locn]
 
-    def sameLocations(self: Self, other: "NginxServerConfig") -> bool:
+    def sameLocations(self, other: "NginxServerConfig") -> bool:
         if len(self.locations) != len(other.locations):
             return False
         for a in self.locations:
@@ -184,7 +184,7 @@ class NginxServerConfig(object):
                 return False
         return True
 
-    def mergeServer(self: Self, other: "NginxServerConfig") -> bool:
+    def mergeServer(self, other: "NginxServerConfig") -> bool:
         if self.use_cache != other.use_cache:
             return False
         if self.certificate_file is None and other.certificate_file is not None:
