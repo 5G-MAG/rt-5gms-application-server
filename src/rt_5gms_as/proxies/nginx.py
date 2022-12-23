@@ -51,6 +51,14 @@ class NginxLocationConfig(object):
         self.provisioning_session: str = provisioning_session
         self.rewrite_rules: List[Tuple[str,str]] = []
 
+        # Ensure prefix URLs end with a '/'
+        if self.path_prefix[0] != '/':
+            self.path_prefix = '/' + self.path_prefix
+        if self.path_prefix[-1] != '/':
+            self.path_prefix += '/'
+        if self.downstream_prefix_url[-1] != '/':
+            self.downstream_prefix_url += '/'
+
     def addRewriteRule(self, request_path_pattern: str, mapped_path: str) -> bool:
         (regex, replace) = self.__transform_rewrite_rules(request_path_pattern,mapped_path)
         if regex is None:
