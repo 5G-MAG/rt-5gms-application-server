@@ -17,7 +17,10 @@
 from fastapi import Request
 from .exceptions import ProblemException, NoProblemException
 from .context import Context
+from .proxy_factory import WebProxyError
 from typing import Tuple
+
+import regex
 
 class M3Server:
     '''
@@ -51,6 +54,8 @@ class M3Server:
         '''
         if self.__context is None:
             raise ProblemException(status_code=500, title='Server not finished initialisation', instance=request.url.path)
+        if request.headers['content-type'] != 'application/json':
+            raise ProblemException(status_code=415, title='Invalid media type', instance=request.url.path)
         # Error 405 if the ContentHostingConfiguration already exists for the provisioning session
         if self.__context.haveContentHostingConfiguration(provisioningSessionId):
             raise ProblemException(status_code=405, title='ContentHostingConfiguration Already Exists', instance=request.url.path)
@@ -83,6 +88,8 @@ class M3Server:
         '''
         if self.__context is None:
             raise ProblemException(status_code=500, title='Server not finished initialisation', instance=request.url.path)
+        if request.headers['content-type'] != 'application/x-pem-file':
+            raise ProblemException(status_code=415, title='Invalid media type', instance=request.url.path)
         # Error 405 if we already have this certificate
         if self.__context.haveCertificate(afUniqueCertificateId):
             raise ProblemException(status_code=405, title='Certificate Already Exists', instance=request.url.path)
@@ -139,11 +146,17 @@ class M3Server:
         '''
         if self.__context is None:
             raise ProblemException(status_code=500, title='Server not finished initialisation', instance=request.url.path)
+        if request.headers['content-type'] != 'application/x-www-form-urlencoded':
+            raise ProblemException(status_code=415, title='Invalid media type', instance=request.url.path)
         try:
             if pattern is None:
                 result = await self.__context.webProxy().purgeAll(provisioningSessionId)
             else:
                 result = await self.__context.webProxy().purgeUsingRegex(provisioningSessionId, pattern)
+        except regex.error as err:
+            raise ProblemException(title='Unprocessable Entity', status_code=422, instance=request.url.path, detail='Bad regex: '+str(err), invalid_params=[{'param': 'pattern', 'reason': str(err)}])
+        except WebProxyError as err:
+            raise ProblemException(title='Internal Error', status_code=500, instance=request.url.path, detail='Regex failed to compile: '+str(err))
         except Exception as err:
             raise ProblemException(title='Internal Error', status_code=500, instance=request.url.path, detail='Exception while purging content: '+str(err))
         if result is True:

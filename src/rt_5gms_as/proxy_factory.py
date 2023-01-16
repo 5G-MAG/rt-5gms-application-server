@@ -71,6 +71,9 @@ def list_registered_web_proxies():
     global __web_proxies
     return [cls for (cls,pri) in __web_proxies]
 
+class WebProxyError(Exception):
+    pass
+
 class WebProxyInterface(object):
     '''
     Base class for web proxy classes
@@ -258,12 +261,15 @@ class WebProxyInterface(object):
         self._context.appLog().debug('Purging entries for %s using regex %s...', provisioningSessionId, re)
         try:
             comp_regex = regex.compile(re)
+        except regex.error as err:
+            self._context.appLog().error('Regex Exception while handling regex.compile: %s'%str(err))
+            raise err
         except Exception as err:
             self._context.appLog().error('Exception while handling regex.compile: %s'%str(err))
             return False
         if comp_regex is None:
             self._context.appLog().error('Regular expression %s failed to compile.', re)
-            return False
+            raise WebProxyError('Regular expression "%s" failed to compile.'%re)
         return await self._purge(key_filter=lambda psid,path: psid==provisioningSessionId and comp_regex.match(path) is not None)
 
     async def purgeUsingPrefix(self, provisioningSessionId: str, prefix: str) -> bool:

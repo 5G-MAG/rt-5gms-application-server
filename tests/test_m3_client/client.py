@@ -22,27 +22,123 @@ This class provides an interface to communicate with a 5GMS Application Server.
 '''
 
 import aiofiles
+import enum
 import json
 import logging
 import os.path
 import os
 import httpx
+import socket
 import sys
-from typing import Optional, Union, Tuple, List
+from typing import Optional, Union, Tuple, List, TypedDict
+
+class InvalidParamMandatory(TypedDict):
+    param: str
+
+class InvalidParam(InvalidParamMandatory, total=False):
+    reason: str
+
+def format_invalid_param(inv_param: InvalidParam):
+    ret: str = inv_param['param']
+    if 'reason' in inv_param and inv_param['reason'] is not None:
+        ret += ' : ' + inv_param['reason']
+    return ret
+
+class AccessTokenErrError(enum.Enum):
+    invalid_request = enum.auto()
+    invalid_client = enum.auto()
+    invalid_grant = enum.auto()
+    unauthorized_client = enum.auto()
+    unsupported_grant_type = enum.auto()
+    invalid_scope = enum.auto()
+
+    def __str__(self):
+        return self.name
+
+class AccessTokenErrMandatory(TypedDict):
+    error: AccessTokenErrError
+
+class AccessTokenErr(AccessTokenErrMandatory, total=False):
+    error_description: str
+    error_uri: str
+
+class AccessTokenReqGrantType(enum.Enum):
+    client_credentials = enum.auto()
+
+    def __str__(self):
+        return self.name
+
+class AccessTokenReqMandatory(TypedDict):
+    grant_type: AccessTokenReqGrantType
+    nfInstanceId: str
+    scope: str
+
+class AccessTokenReq(AccessTokenReqMandatory, total=False):
+    nfType: str
+    targetNfType: str
+    targetNfInstanceId: str
+    requesterPlmn: str
+    requesterPlmnList: List[str]
+    requesterSnssaiList: List[str]
+    requesterFqdn: str
+    requesterSnpnList: List[str]
+    targetPlmn: str
+    targetSnssaiList: List[str]
+    targetNsiList: List[str]
+    targetNfSetId: str
+    targetNfServiceSetId: str
+    hnrfAccessTokenUri: str
+    sourceNfInstanceId: str
+
+class ProblemDetail(TypedDict, total=False):
+    problemtype: str
+    title: str
+    status: int
+    detail: str
+    instance: str
+    cause: str
+    invalidParams: List[InvalidParam]
+    supportedFeatures: str
+    accessTokenError: AccessTokenErr
+    accessTokenRequest: AccessTokenReq
+    nrfId: str
+
+    @staticmethod
+    def fromJSON(problem_detail_json: str):
+        pd = json.loads(problem_detail_json)
+        if 'accessTokenError' in pd:
+            for ate in pd['accessTokenError']:
+                ate['error'] = AccessTokenErrError(ate['error'])
+        if 'accessTokenRequest' in pd:
+            for atr in pd['accessTokenRequest']:
+                atr['grant_type'] = AccessTokenReqGrantType(atr['grant_type'])
+        return pd
 
 class M3Exception(Exception):
     '''Exception raised when there was a problem during M3 operations.
     '''
-    def __init__(self, reason: str, status_code: Optional[int] = None):
-        super().__init__(reason, status_code)
+    def __init__(self, reason: str, status_code: Optional[int] = None, problem_detail: Optional[ProblemDetail] = None):
+        super().__init__(reason, status_code, problem_detail)
 
     def __str__(self) -> str:
+        if self.args[2] is not None:
+            problem = self.args[2]
+            ret: str = ''
+            if self.args[1] is not None:
+                ret = '[%i] '%self.args[1]
+            if 'title' in problem:
+                ret += problem['title']+'\n'
+            if 'description' in problem:
+                ret += problem['description']
+            if 'invalidParams' in problem and problem['invalidParams'] is not None:
+                ret += '\nInvalid Parameters:\n'+'\n'.join(['  '+format_invalid_param(p) for p in problem['invalidParams']])
+            return ret
         if self.args[1] is not None:
             return '[%i] %s'%(self.args[1], self.args[0])
         return self.args[0]
 
     def __repr__(self) -> str:
-        return self.__class__.__name__+'(reason=%r, status_code=%r)'%self.args
+        return self.__class__.__name__+'(reason=%r, status_code=%r, problem_detail=%r)'%self.args
 
 class M3ClientException(M3Exception):
     '''Exception raised when there was a problem with the client request.
@@ -70,8 +166,12 @@ class M3Client(object):
         if headers is not None:
             req_headers.update(headers)
         url = 'http://'+self.__host_address[0]+':'+str(self.__host_address[1])+'/3gpp-m3/v1'+url_suffix
+        s = socket.socket(type=socket.SOCK_DGRAM)
+        s.connect(self.__host_address)
+        localip=s.getsockname()[0]
+        fqdn=socket.gethostbyaddr(localip)[0]
         if self.__session is None:
-            self.__session = httpx.AsyncClient(http1=False, http2=True, headers={'User-Agent': '5GMS-AF/testing'})
+            self.__session = httpx.AsyncClient(http1=False, http2=True, headers={'User-Agent': f'5GMSdAF-{fqdn}/testing'})
         req = self.__session.build_request(method, url, headers=req_headers, data=body)
         resp = await self.__session.send(req)
         return {'status_code': resp.status_code, 'body': resp.text, 'headers': resp.headers}
@@ -100,10 +200,13 @@ class M3Client(object):
             raise M3ServerException('Service Unavailable', status_code=result['status_code'])
         else:
             msg = 'Unknown status code, %i, from server'%result['status_code']
+            pd: Optional[ProblemDetail] = None
+            if result['headers']['content-type'] == 'application/problem+json':
+                pd = ProblemDetail.fromJSON(result['body'])
             if result['status_code'] < 500:
-                raise M3ClientException(msg, status_code=result['status_code'])
+                raise M3ClientException(msg, status_code=result['status_code'], problem_detail=pd)
             else:
-                raise M3ServerException(msg, status_code=result['status_code'])
+                raise M3ServerException(msg, status_code=result['status_code'], problem_detail=pd)
 
     async def updateCertificateFromPemFile(self, certificate_id: str, pem_filename: str) -> bool:
         async with aiofiles.open(pem_file, mode='rb') as pem_in:
@@ -132,10 +235,13 @@ class M3Client(object):
             raise M3ServerException('Service Unavailable', status_code=result['status_code'])
         else:
             msg = 'Unknown status code, %i, from server'%result['status_code']
+            pd: Optional[ProblemDetail] = None
+            if result['headers']['content-type'] == 'application/problem+json':
+                pd = ProblemDetail.fromJSON(result['body'])
             if result['status_code'] < 500:
-                raise M3ClientException(msg, status_code=result['status_code'])
+                raise M3ClientException(msg, status_code=result['status_code'], problem_detail=pd)
             else:
-                raise M3ServerException(msg, status_code=result['status_code'])
+                raise M3ServerException(msg, status_code=result['status_code'], problem_detail=pd)
 
     async def deleteCertificate(self, certificate_id: str) -> bool:
         result = await self.__do_request('DELETE', '/certificates/'+certificate_id, None, 'application/json')
@@ -156,10 +262,13 @@ class M3Client(object):
             raise M3ServerException('Service Unavailable', status_code=result['status_code'])
         else:
             msg = 'Unknown status code, %i, from server'%result['status_code']
+            pd: Optional[ProblemDetail] = None
+            if result['headers']['content-type'] == 'application/problem+json':
+                pd = ProblemDetail.fromJSON(result['body'])
             if result['status_code'] < 500:
-                raise M3ClientException(msg, status_code=result['status_code'])
+                raise M3ClientException(msg, status_code=result['status_code'], problem_detail=pd)
             else:
-                raise M3ServerException(msg, status_code=result['status_code'])
+                raise M3ServerException(msg, status_code=result['status_code'], problem_detail=pd)
 
     async def listCertificates(self) -> List[str]:
         result = await self.__do_request('GET', '/certificates', None, 'application/json')
@@ -171,10 +280,13 @@ class M3Client(object):
             raise M3ServerException('Service Unavailable', status_code=result['status_code'])
         else:
             msg = 'Unknown status code, %i, from server'%result['status_code']
+            pd: Optional[ProblemDetail] = None
+            if result['headers']['content-type'] == 'application/problem+json':
+                pd = ProblemDetail.fromJSON(result['body'])
             if result['status_code'] < 500:
-                raise M3ClientException(msg, status_code=result['status_code'])
+                raise M3ClientException(msg, status_code=result['status_code'], problem_detail=pd)
             else:
-                raise M3ServerException(msg, status_code=result['status_code'])
+                raise M3ServerException(msg, status_code=result['status_code'], problem_detail=pd)
 
     async def addContentHostingConfigurationFromJsonFile(self, provisioning_session_id: str, chc_filename: str) -> bool:
         async with aiofiles.open(chc_filename, mode='rb') as chc_in:
@@ -204,10 +316,13 @@ class M3Client(object):
             raise M3ServerException('Service Unavailable', status_code=result['status_code'])
         else:
             msg = 'Unknown status code, %i, from server'%result['status_code']
+            pd: Optional[ProblemDetail] = None
+            if result['headers']['content-type'] == 'application/problem+json':
+                pd = ProblemDetail.fromJSON(result['body'])
             if result['status_code'] < 500:
-                raise M3ClientException(msg, status_code=result['status_code'])
+                raise M3ClientException(msg, status_code=result['status_code'], problem_detail=pd)
             else:
-                raise M3ServerException(msg, status_code=result['status_code'])
+                raise M3ServerException(msg, status_code=result['status_code'], problem_detail=pd)
 
     async def updateContentHostingConfigurationFromJsonFile(self, provisioning_session_id: str, chc_file: str) -> bool:
         async with aiofiles.open(chc_file, mode='rb') as chc_in:
@@ -240,10 +355,13 @@ class M3Client(object):
             raise M3ServerException('Service Unavailable', status_code=result['status_code'])
         else:
             msg = 'Unknown status code, %i, from server'%result['status_code']
+            pd: Optional[ProblemDetail] = None
+            if result['headers']['content-type'] == 'application/problem+json':
+                pd = ProblemDetail.fromJSON(result['body'])
             if result['status_code'] < 500:
-                raise M3ClientException(msg, status_code=result['status_code'])
+                raise M3ClientException(msg, status_code=result['status_code'], problem_detail=pd)
             else:
-                raise M3ServerException(msg, status_code=result['status_code'])
+                raise M3ServerException(msg, status_code=result['status_code'], problem_detail=pd)
 
     async def deleteContentHostingConfiguration(self, provisioning_session_id: str) -> bool:
         result = await self.__do_request('DELETE', '/content-hosting-configurations/'+provisioning_session_id, None, 'application/json')
@@ -262,10 +380,13 @@ class M3Client(object):
             raise M3ServerException('Service Unavailable', status_code=result['status_code'])
         else:
             msg = 'Unknown status code, %i, from server'%result['status_code']
+            pd: Optional[ProblemDetail] = None
+            if result['headers']['content-type'] == 'application/problem+json':
+                pd = ProblemDetail.fromJSON(result['body'])
             if result['status_code'] < 500:
-                raise M3ClientException(msg, status_code=result['status_code'])
+                raise M3ClientException(msg, status_code=result['status_code'], problem_detail=pd)
             else:
-                raise M3ServerException(msg, status_code=result['status_code'])
+                raise M3ServerException(msg, status_code=result['status_code'], problem_detail=pd)
 
     async def listContentHostingConfigurations(self) -> List[str]:
         result = await self.__do_request('GET', '/content-hosting-configurations', None, 'application/json')
@@ -277,10 +398,13 @@ class M3Client(object):
             raise M3ServerException('Service Unavailable', status_code=result['status_code'])
         else:
             msg = 'Unknown status code, %i, from server'%result['status_code']
+            pd: Optional[ProblemDetail] = None
+            if result['headers']['content-type'] == 'application/problem+json':
+                pd = ProblemDetail.fromJSON(result['body'])
             if result['status_code'] < 500:
-                raise M3ClientException(msg, status_code=result['status_code'])
+                raise M3ClientException(msg, status_code=result['status_code'], problem_detail=pd)
             else:
-                raise M3ServerException(msg, status_code=result['status_code'])
+                raise M3ServerException(msg, status_code=result['status_code'], problem_detail=pd)
 
     async def purgeContentHostingCache(self, provisioning_session_id: str, pattern: Optional[str] = None) -> bool:
         body = None
@@ -297,14 +421,22 @@ class M3Client(object):
             raise M3ClientException('URI too long for server, try shorter provisioning session id.', status_code=result['status_code'])
         elif result['status_code'] == 415:
             raise M3ClientException('Unsupported media-type', status_code=result['status_code'])
+        elif result['status_code'] == 422:
+            pd: Optional[ProblemDetail] = None
+            if result['headers']['content-type'] == 'application/problem+json':
+                pd = ProblemDetail.fromJSON(result['body'])
+            raise M3ClientException('Problem with the purge filter', status_code=result['status_code'], problem_detail=pd)
         elif result['status_code'] == 500:
             raise M3ServerException('Internal Server Error', status_code=result['status_code'])
         elif result['status_code'] == 503:
             raise M3ServerException('Service Unavailable', status_code=result['status_code'])
         else:
             msg = 'Unknown status code, %i, from server'%result['status_code']
+            pd: Optional[ProblemDetail] = None
+            if result['headers']['content-type'] == 'application/problem+json':
+                pd = ProblemDetail.fromJSON(result['body'])
             if result['status_code'] < 500:
-                raise M3ClientException(msg, status_code=result['status_code'])
+                raise M3ClientException(msg, status_code=result['status_code'], problem_detail=pd)
             else:
-                raise M3ServerException(msg, status_code=result['status_code'])
+                raise M3ServerException(msg, status_code=result['status_code'], problem_detail=pd)
 

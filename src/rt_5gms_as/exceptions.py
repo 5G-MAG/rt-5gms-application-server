@@ -19,10 +19,16 @@
 Reference Tools: 5GMS Application Server Exceptions
 ===================================================
 '''
-from typing import Optional
+from typing import Optional, List, TypedDict
+
+class InvalidParamMandatory(TypedDict):
+    param: str
+
+class InvalidParam(InvalidParamMandatory, total=False):
+    reason: str
 
 class ProblemException(Exception):
-    def __init__(self, status_code=500, title=None, detail=None, problem_type=None, instance=None, headers: Optional[dict] = None):
+    def __init__(self, status_code=500, title=None, detail=None, problem_type=None, instance=None, headers: Optional[dict] = None, invalid_params: Optional[List[InvalidParam]] = None):
         # defaults
         if title is None:
             title = 'Internal Server Error'
@@ -39,10 +45,13 @@ class ProblemException(Exception):
         self.problem_type = problem_type
         self.instance = instance
         self.headers = headers
+        self.invalid_params = invalid_params
         # Create Problem object
         self.object = {'title': self.title, 'detail': self.detail, 'type': self.problem_type, 'status': self.status_code}
         if self.instance is not None:
             self.object['instance'] = self.instance
+        if self.invalid_params is not None and len(self.invalid_params) > 0:
+            self.object['invalidParams'] = self.invalid_params
 
     def __str__(self):
         return '[%i] %s'%(self.status_code,self.detail)

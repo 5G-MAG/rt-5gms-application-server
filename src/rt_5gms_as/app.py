@@ -156,7 +156,7 @@ async def __app(context):
 
     @m3_app.exception_handler(ProblemException)
     async def problem_exception_handler(request, exc):
-        return AppJSONResponse(status_code=exc.status_code, content=exc.object, headers=exc.headers)
+        return AppJSONResponse(status_code=exc.status_code, content=exc.object, headers=exc.headers, media_type='application/problem+json')
 
     @m3_app.exception_handler(NoProblemException)
     async def no_problem_exception_handler(request, exc):
