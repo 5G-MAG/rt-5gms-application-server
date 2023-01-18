@@ -70,6 +70,10 @@ class NginxLocationConfig(object):
     def __eq__(self, other: "NginxLocationConfig") -> bool:
         if self.path_prefix != other.path_prefix:
             return False
+        if self.provisioning_session != other.provisioning_session:
+            return False
+        if self.downstream_prefix_url != other.downstream_prefix_url:
+            return False
         if len(self.rewrite_rules) != len(other.rewrite_rules):
             return False
         for a in self.rewrite_rules:
@@ -144,7 +148,7 @@ class NginxServerConfig(object):
             self.port: int = int(self.__context.getConfigVar('5gms_as','https_port'))
         else:
             self.port: int = int(self.__context.getConfigVar('5gms_as','http_port'))
-        self.locations: List[NginxLocationConfig] = []
+        self.locations: Dict[str,NginxLocationConfig] = {}
         self.use_cache: bool = use_cache
 
     async def config(self, indent: int = 0) -> str:
@@ -164,7 +168,7 @@ class NginxServerConfig(object):
         if self.use_cache:
             ret += prefix + '  proxy_cache cacheone;\n'
             ret += '\n'
-        for locn in self.locations:
+        for locn in self.locations.values():
             ret += await locn.config(indent+2)
             ret += '\n'
         ret += prefix + '  location / {\n'
@@ -182,7 +186,11 @@ class NginxServerConfig(object):
         return ret
 
     def addLocation(self, locn: NginxLocationConfig) -> None:
-        self.locations += [locn]
+        if locn.path_prefix in self.locations:
+            if locn != self.locations[locn.path_prefix]:
+                raise RuntimeError('Conflicting locations with the same path prefix: '+locn.path_prefix)
+        else:
+            self.locations[locn.path_prefix] = locn
 
     def sameLocations(self, other: "NginxServerConfig") -> bool:
         if len(self.locations) != len(other.locations):
