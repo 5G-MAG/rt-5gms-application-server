@@ -89,18 +89,24 @@ At this point the 5GMS Application Server is ready for configuration by an M3 cl
 ## Testing with the Application Function
 
 1. Install both the 5GMS Application Server and Application Function.
+  - To install the 5GMS Application Server follow either the sdist, direct from source or in a virtual environment instructions from the [Installing](../README.md#installing) section of the main README.
+  - To install the 5GMS Application Function follow the directions to install the dependencies, retrieve, build and install the 5GMS Application Function from the [5GMS Application Function documentation](https://github.com/5G-MAG/rt-5gms-application-function#install-dependencies).
 2. Configure the Application Function with the M3 port number of the Application Server (i.e. 7777) in the `msaf.applicationServers` section of the `msaf.yaml` file.
+
+  - This is an example `applicationServers` entry from the `msaf.yaml` configuration file with the `m3Port` set.
 ```yaml
-msaf:
-    ...
-    applicationServers:
-      - canonicalHostname: localhost
-        urlPathPrefixFormat: /m4d/provisioning-session-{provisioningSessionId}/
-        m3Port: 7777
-    ...
+    msaf:
+        ...
+        applicationServers:
+          - canonicalHostname: localhost
+            urlPathPrefixFormat: /m4d/provisioning-session-{provisioningSessionId}/
+            m3Port: 7777
+        ...
 ```
-3. Start the Application Server.
-4. Start the Application Function.
+3. In one terminal window, start the Application Server.
+  - e.g. use the command `5gms-application-server`
+4. In another terminal window, start the Application Function.
+  - e.g. use the command `~/rt-5gms-application-function/install/bin/open5gs-msafd`
 
 The Application Function should then configure the Application Server using the Server Certificates and Content Hosting Configuration it has been configured with. This should be evident from log messages from the Application Server and Application Function and from the /tmp/rt_5gms_as.conf NGINX configuration.
 

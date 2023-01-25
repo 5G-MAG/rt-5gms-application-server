@@ -27,12 +27,12 @@ daemon that can be controlled by the AS is nginx
 
 ```
 sudo apt install git python3-pip python3-venv
-python3 -m pip install build
+python3 -m pip install --upgrade pip build setuptools
 ```
 
 ## Downloading
 
-Release sdist tar files can be downloaded from _TBC_.
+Release sdist tar files can be downloaded from the [releases](https://github.com/5G-MAG/rt-5gms-application-server/releases) page.
 
 The source can be obtained by cloning the github repository.
 
@@ -42,6 +42,16 @@ git clone --recurse-submodules https://github.com/5G-MAG/rt-5gms-application-ser
 ```
 
 ## Building a Python distribution
+
+### Prerequisites for building
+
+You will additionally need `wget` and `java` to build a distribution.
+
+```
+sudo apt install wget default-jdk
+```
+
+### Building a distribution tar
 
 To build a Python sdist distribution tar do the following.
 
@@ -54,22 +64,44 @@ The distribution sdist tar file can then be found in the `dist` subdirectory.
 
 ## Installing
 
+### Install from sdist
+
 This application can be installed using pip with a distribution sdist tar file:
 
 ```
 python3 -m pip install rt-5gms-application-server-<version>.tar.gz
 ```
 
-Alternatively, to installing the 5GMS Application Server from the source can be done using these commands:
+If installing as a unprivileged user, the installed files will be added to a local installation place in your home directory. A warning is shown indicating that the directory where the application is installed should be added to your path with a command like `PATH="${PATH}:${HOME}/.local/bin" export PATH`.
+
+### Install direct from source
+
+Alternatively, to install the 5GMS Application Server directly from the source you will first need the build prerequisites, `wget` and `java`, indicated above in the [Prerequisites for building](#prerequisites-for-building) section. After installing these the application can bi install directly using these commands:
 
 ```
 cd ~/rt-5gms-application-server
 python3 -m pip install .
 ```
 
+### Installing in a virtual Python environment
+
+If you are testing out this project then you may wish to install in a Python virtual environment instead so that you do not disturb you present system packages.
+
+You will need the `wget` and `java` prerequisites, see the [Prerequisites for building](#prerequisites-for-building) section above for details.
+
+After installing the prerequisites, you can install the 5GMS Application Server using the commands:
+
+```
+cd ~/rt-5gms-application-server
+python3 -v venv venv
+venv/bin/python3 -m pip install .
+```
+
+When using the virtual environment approach, then you can run the application directly using `venv/bin/5gms-application-server` instead of just `5gms-application-server` in the following instructions, or you can activate the virtual environment using `source venv/bin/activate` to automatically add the `venv/bin` directory early in the executable search path and just use the `5gms-application-server` command.
+
 ## Running
 
-Once [installed](#Installing), the application server can be run using the following command syntax:
+Once [installed](#installing), the application server can be run using the following command syntax:
 
 ```
 Syntax: 5gms-application-server [-c <configuration-file>] <ContentHostingConfiguration-JSON-file>
