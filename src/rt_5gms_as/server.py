@@ -159,9 +159,9 @@ class M3Server:
             raise ProblemException(title='Internal Error', status_code=500, instance=request.url.path, detail='Regex failed to compile: '+str(err))
         except Exception as err:
             raise ProblemException(title='Internal Error', status_code=500, instance=request.url.path, detail='Exception while purging content: '+str(err))
-        if result is True:
+        if result == 0:
             raise NoProblemException(status_code=204)
-        raise NoProblemException(status_code=200)
+        return result
 
     async def retrieve_content_hosting_configurations(self, request=None):
         '''M3 Handler for "POST /3gpp-m3/v1/content-hosting-configurations"

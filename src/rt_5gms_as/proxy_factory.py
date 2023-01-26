@@ -245,18 +245,18 @@ class WebProxyInterface(object):
                 return False
         return True
 
-    async def purgeAll(self, provisioningSessionId: str) -> bool:
+    async def purgeAll(self, provisioningSessionId: str) -> int:
         '''Purge all cache entries for the provisioning session
 
-        Returns True if the purge succeeded or False if there was an error.
+        Returns the number of items purged.
         '''
         self._context.appLog().debug('Purging all entries for %s...', provisioningSessionId)
         return await self._purge(key_filter=lambda psid,path: psid==provisioningSessionId)
 
-    async def purgeUsingRegex(self, provisioningSessionId: str, re: str) -> bool:
+    async def purgeUsingRegex(self, provisioningSessionId: str, re: str) -> int:
         '''Purge cache entries for the provisioning session that match a regex
 
-        Returns True if the purge succeeded or False if there was an error.
+        Returns the number of items purged.
         '''
         self._context.appLog().debug('Purging entries for %s using regex %s...', provisioningSessionId, re)
         try:
@@ -266,24 +266,24 @@ class WebProxyInterface(object):
             raise err
         except Exception as err:
             self._context.appLog().error('Exception while handling regex.compile: %s'%str(err))
-            return False
+            raise err
         if comp_regex is None:
             self._context.appLog().error('Regular expression %s failed to compile.', re)
             raise WebProxyError('Regular expression "%s" failed to compile.'%re)
         return await self._purge(key_filter=lambda psid,path: psid==provisioningSessionId and comp_regex.match(path) is not None)
 
-    async def purgeUsingPrefix(self, provisioningSessionId: str, prefix: str) -> bool:
+    async def purgeUsingPrefix(self, provisioningSessionId: str, prefix: str) -> int:
         '''Purge cache entries for the provisioning session with a path prefix
 
-        Returns True if the purge succeeded or False if there was an error.
+        Returns the number of items purged.
         '''
         self._context.appLog().debug('Purging entries for %s using URL path prefix %s...', provisioningSessionId, prefix)
         return await self._purge(key_filter=lambda psid,path: psid==provisioningSessionId and path[:len(prefix)]==prefix)
 
-    async def purgePath(self, provisioningSessionId: str, purge_path: str) -> bool:
+    async def purgePath(self, provisioningSessionId: str, purge_path: str) -> int:
         '''Purge cache entries for the provisioning session that match a path
 
-        Returns True if the purge succeeded or False if there was an error.
+        Returns the number of items purged.
         '''
         self._context.appLog().debug('Purging %s in %s...', purge_path, provisioningSessionId)
         return self._purge(key_filter=lambda psid,path: psid==provisioningSessionId and path==purge_path)
@@ -365,7 +365,7 @@ class WebProxyInterface(object):
         self.log.debug("WebProxy._wait() in Task %s finished", task_name)
         return True
 
-    async def _purge(self, key_filter: Callable[[str,str], bool]) -> bool:
+    async def _purge(self, key_filter: Callable[[str,str], bool]) -> int:
         try:
             to_purge = [file for (file,psid,urlpath) in await self._getCacheFilesAndKeys() if key_filter(psid,urlpath)]
             self._context.appLog().debug('Matching cache entries: %r', to_purge)
@@ -376,8 +376,8 @@ class WebProxyInterface(object):
                 await self._postPurgeActions()
         except Exception as err:
             self._context.appLog().error('Error while purging cache: %s', str(err))
-            return False
-        return True
+            raise err
+        return len(to_purge)
 
     async def _getCacheFilesAndKeys(self) -> List[Tuple[str,str,str]]:
         '''Return a list of all cache files
