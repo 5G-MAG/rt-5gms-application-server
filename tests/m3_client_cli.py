@@ -63,6 +63,13 @@ def bool_result(result: bool) -> int:
         print("No change")
     return 0
 
+def purge_result(result: int) -> int:
+    if result == 1:
+        print('Purged 1 cache entry')
+    else:
+        print('Purged %i cache entries'%result)
+    return 0
+
 def certificates_list_result(result: list) -> int:
     print('Known certificates:\n   '+'\n   '.join(result))
     return 0
@@ -90,7 +97,7 @@ def main():
         {'flags': ['--content-hosting-configuration','add'], 'fn': m3_client.addContentHostingConfigurationFromJsonFile, 'args': ['<provisioning-session-id>', '<content-hosting-configuration-json-file>'], 'format': bool_result},
         {'flags': ['--content-hosting-configuration','update'], 'fn': m3_client.updateContentHostingConfigurationFromJsonFile, 'args': ['<provisioning-session-id>', '<content-hosting-configuration-json-file>'], 'format': bool_result},
         {'flags': ['--content-hosting-configuration','delete'], 'fn': m3_client.deleteContentHostingConfiguration, 'args': ['<provisioning-session-id>'], 'format': bool_result},
-        {'flags': ['--content-hosting-configuration','purge'], 'fn': m3_client.purgeContentHostingCache, 'args': ['<provisioning-session-id>'], 'kwargs': [('pattern','<pattern>')], 'format': bool_result},
+        {'flags': ['--content-hosting-configuration','purge'], 'fn': m3_client.purgeContentHostingCache, 'args': ['<provisioning-session-id>'], 'kwargs': [('pattern','<pattern>')], 'format': purge_result},
         {'flags': ['--content-hosting-configuration'], 'fn': m3_client.listContentHostingConfigurations, 'args': [], 'format': chc_list_result},
         ]
 

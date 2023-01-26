@@ -406,13 +406,15 @@ class M3Client(object):
             else:
                 raise M3ServerException(msg, status_code=result['status_code'], problem_detail=pd)
 
-    async def purgeContentHostingCache(self, provisioning_session_id: str, pattern: Optional[str] = None) -> bool:
+    async def purgeContentHostingCache(self, provisioning_session_id: str, pattern: Optional[str] = None) -> int:
         body = None
         if pattern is not None:
             body = bytes('pattern=%s'%pattern, 'utf-8')
         result = await self.__do_request('POST', '/content-hosting-configurations/'+provisioning_session_id+'/purge', body, 'application/x-www-form-urlencoded')
-        if result['status_code'] == 204:
-            return True
+        if result['status_code'] == 200:
+            return int(result['body'])
+        elif result['status_code'] == 204:
+            return 0
         elif result['status_code'] == 404:
             raise M3ClientException('ContentHostingConfiguration not found!', status_code=result['status_code'])
         elif result['status_code'] == 413:
