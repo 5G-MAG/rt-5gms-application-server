@@ -7,10 +7,11 @@ This repository holds the 5GMS Application Server implementation for the 5G-MAG 
 The 5GMS application server (AS) is a Network Function that forms part of the 5G Media Services framework as defined in
 ETSI TS 126.501.
 
-This implementation is comprised of a small Python daemon process which implements the 5GMS M3 interface and controls an external
-HTTP(S) Web Server/Proxy daemon to provide the M4d interface.
+This implementation is comprised of a small Python daemon process which implements the 5GMS AS configuration service at interface M3,
+and which also manages an external HTTP(S) Web Server/Proxy daemon subprocess to ingest content (pull ingest only) at interface M2d
+and serve it to 5GMS Clients at interface M4d.
 
-The AS is confgured via the M3 interface, therefore you will need an appropriate M3 client to configure the AS. Such a client is
+The AS is configured via the M3 interface, therefore you will need an appropriate M3 client to configure the AS. Such a client is
 the [5GMS AF](https://github.com/5G-MAG/rt-5gms-application-function) (release v1.1.0 and above).
 
 The web server or reverse proxy functionality is provided by an external daemon. This 5GMS AS manages the external
