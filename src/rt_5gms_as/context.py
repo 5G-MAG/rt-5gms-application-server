@@ -42,6 +42,7 @@ run_dir = /run/rt-5gms
 [5gms_as]
 log_level = info
 cache_dir = /var/cache/rt-5gms/as/cache
+docroot = /var/cache/rt-5gms/as/docroots
 certificates_cache = /var/cache/rt-5gms/as/certificates
 listen_address = ::
 http_port = 80
@@ -54,6 +55,7 @@ error_log = %(log_dir)s/application-server-error.log
 pid_path = %(run_dir)s/application-server.pid
 
 [5gms_as.nginx]
+config_file = /tmp/rt_5gms_as.conf
 root_temp = /var/cache/rt-5gms/as
 client_body_temp = %(root_temp)s/client-body-tmp
 proxy_temp = %(root_temp)s/proxy-tmp

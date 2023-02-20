@@ -29,6 +29,7 @@ import importlib.resources
 import os
 import os.path
 import regex
+import shutil
 import signal
 import subprocess
 import traceback
@@ -140,7 +141,7 @@ class NginxServerConfig(object):
     '''
     Class to hold and compare server configurations
     '''
-    def __init__(self, context: Context, hostnames: Set[str], use_cache: bool = False, certfile: Optional[str] = None):
+    def __init__(self, context: Context, hostnames: Set[str], use_cache: bool = False, certfile: Optional[str] = None, docroot: Optional[str] = None):
         self.__context: Context = context
         self.hostnames: Set[str] = hostnames
         self.certificate_file: Optional[str] = certfile
@@ -150,6 +151,21 @@ class NginxServerConfig(object):
             self.port: int = int(self.__context.getConfigVar('5gms_as','http_port'))
         self.locations: Dict[str,NginxLocationConfig] = {}
         self.use_cache: bool = use_cache
+        if docroot is None:
+            master_hosts = [host for host in hostnames if host not in ['localhost', '127.0.0.1']]
+            if len(master_hosts) > 0:
+                master_host = master_hosts[0]
+            else:
+                master_host = 'localhost'
+            docroot = os.path.join(self.__context.getConfigVar('5gms_as','docroot'), master_host)
+        self.docroot: str = docroot
+        if not os.path.exists(docroot):
+            os.makedirs(docroot, mode=0o700)
+            for copy_file in ['404.html', '50x.html']:
+                src = os.path.join('/usr/share/nginx/html', copy_file)
+                if os.path.exists(src):
+                    self.__context.appLog().debug("Copy %s => %s", src, docroot)
+                    shutil.copy2(src, docroot)
 
     async def config(self, indent: int = 0) -> str:
         prefix = ' ' * indent
@@ -160,6 +176,7 @@ class NginxServerConfig(object):
         ret += prefix + '  listen %i%s;\n'%(self.port, ssl_flag)
         ret += prefix + '  listen [::]:%i%s;\n'%(self.port, ssl_flag)
         ret += prefix + '  server_name %s;\n'%(' '.join(self.hostnames))
+        ret += prefix + '  root %s;\n'%(self.docroot)
         ret += '\n'
         if self.certificate_file is not None:
             ret += prefix + '  ssl_certificate %s;\n'%self.certificate_file
@@ -171,10 +188,10 @@ class NginxServerConfig(object):
         for locn in self.locations.values():
             ret += await locn.config(indent+2)
             ret += '\n'
-        ret += prefix + '  location / {\n'
-        ret += prefix + '    return 404;\n'
-        ret += prefix + '  }\n'
-        ret += '\n'
+        #ret += prefix + '  location / {\n'
+        #ret += prefix + '    return 404;\n'
+        #ret += prefix + '  }\n'
+        #ret += '\n'
         ret += prefix + '  error_page 404 /404.html;\n'
         ret += prefix + '  location = /404.html {\n'
         ret += prefix + '  }\n'
@@ -202,6 +219,8 @@ class NginxServerConfig(object):
 
     def mergeServer(self, other: "NginxServerConfig") -> bool:
         if self.use_cache != other.use_cache:
+            return False
+        if self.docroot != other.docroot:
             return False
         if self.certificate_file is None and other.certificate_file is not None:
             return False
@@ -241,10 +260,6 @@ class NginxWebProxy(WebProxyInterface):
     __nginx = None
     __last_nginx_check = None
 
-    # Constants which should be replaced by values from a configuration file
-    #__nginx_conf_path   = '/etc/nginx/rt_5gms_as.conf'
-    __nginx_conf_path   = '/tmp/rt_5gms_as.conf'
-
     @classmethod
     def isPresent(cls):
         '''
@@ -274,6 +289,7 @@ class NginxWebProxy(WebProxyInterface):
         Return True if it the configuration could be generated and writted to a
                file.
         '''
+        config_file = self._context.getConfigVar('5gms_as.nginx','config_file')
         http_port = self._context.getConfigVar('5gms_as','http_port')
         error_log_path = self._context.getConfigVar('5gms_as','error_log')
         access_log_path = self._context.getConfigVar('5gms_as','access_log')
@@ -346,7 +362,7 @@ class NginxWebProxy(WebProxyInterface):
         try:
             # Try to write out the configuration file using nginx.conf.tmpl as
             # a template for the configuration file.
-            with open(self.__nginx_conf_path, 'w') as conffile:
+            with open(config_file, 'w') as conffile:
                 with importlib.resources.open_text(__package__,'nginx.conf.tmpl') as template:
                     for line in template:
                         conffile.write(line.format(**locals()))
@@ -360,7 +376,10 @@ class NginxWebProxy(WebProxyInterface):
 
         Delete the automatically generated nginx configuration.
         '''
-        os.unlink(self.__nginx_conf_path)
+        try:
+            os.unlink(self._context.getConfigVar('5gms_as.nginx','config_file'))
+        except FileNotFoundError:
+            pass
         return True
 
     async def startDaemon(self):
@@ -374,7 +393,7 @@ class NginxWebProxy(WebProxyInterface):
         if cmd is None:
             return False
         # Only include the command line arguments accepted by the local nginx
-        cmd_line = self.__check_nginx_flags(cmd,[('-e',self._context.getConfigVar('5gms_as', 'error_log')), ('-c',self.__nginx_conf_path), ('-g','daemon off;')])
+        cmd_line = self.__check_nginx_flags(cmd,[('-e',self._context.getConfigVar('5gms_as', 'error_log')), ('-c',self._context.getConfigVar('5gms_as.nginx','config_file')), ('-g','daemon off;')])
         return await self._startDaemon(cmd_line)
 
     async def wait(self):
