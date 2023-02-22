@@ -29,14 +29,7 @@ daemon that can be controlled by the AS is nginx ([website](https://nginx.org/))
 
 ```
 sudo apt install git python3-pip python3-venv
-python3 -m pip install --upgrade pip build setuptools
-```
-
-## Install dependencies
-
-```
-sudo apt install git python3-pip python3-venv
-python3 -m pip install build
+sudo python3 -m pip install --upgrade pip build setuptools
 ```
 
 ## Downloading
@@ -78,7 +71,7 @@ The distribution sdist tar file can then be found in the `dist` subdirectory.
 This application can be installed using pip with a distribution sdist tar file:
 
 ```
-python3 -m pip install rt-5gms-application-server-<version>.tar.gz
+sudo python3 -m pip install rt-5gms-application-server-<version>.tar.gz
 ```
 
 If installing as a unprivileged user, the installed files will be added to a local installation place in your home directory. A warning is shown indicating that the directory where the application is installed should be added to your path with a command like `PATH="${PATH}:${HOME}/.local/bin" export PATH`.
@@ -89,7 +82,7 @@ Alternatively, to install the 5GMS Application Server directly from the source y
 
 ```
 cd ~/rt-5gms-application-server
-python3 -m pip install .
+sudo python3 -m pip install .
 ```
 
 ### Installing in a virtual Python environment
