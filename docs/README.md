@@ -183,7 +183,7 @@ sudo 5gms-application-server
 
 ### To configure a simple HTTP Application Server
 
-Make sure the AS is running first (see ["Running the Application Server for testing with `m3_client_cli.py`"](#running-the-application-server-for-testing-with-m3-client-cli-py) above).
+Make sure the AS is running first (see ["Running the Application Server for testing with `m3_client_cli.py`"](#running-the-application-server-for-testing-with-m3_client_clipy) above).
 
 ```bash
 cd ~/rt-5gms-application-server
@@ -193,7 +193,7 @@ This should respond with a "Success!" message, and NGINX should now be running o
 
 ### To configure an HTTPS Application Server
 
-Make sure the AS is running first (see ["Running the Application Server for testing with `m3_client_cli.py`"](#running-the-application-server-for-testing-with-m3-client-cli-py) above).
+Make sure the AS is running first (see ["Running the Application Server for testing with `m3_client_cli.py`"](#running-the-application-server-for-testing-with-m3_client_clipy) above).
 
 This requires that the server certificate is pushed to the Application Server before the content hosting configuration is.
 
