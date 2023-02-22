@@ -143,6 +143,8 @@ Options:
                              List known ContentHostingConfigurations or perform an operation on ContentHostingConfigurations.
 ```
 
+This can be used instead of the AF to configure a running AS.
+
 ### Prerequisite packages
 
 These testing scripts require a few more Python 3 modules to be installed, beyond what is brought in as requirements when the when the application server is installed.
@@ -158,7 +160,30 @@ apt install python3-docopt python3-aiofiles python3-httpx python3-h2
 python3 -m pip install docopt aiofiles 'httpx[http2]'
 ```
 
+### Running the Application Server for testing with `m3_client_cli.py`
+
+When running any of the following tests the Application Server must be running first. The exact command will depend on how you installed the Application Server or whether you are [running directly without building](#running-the-example-without-building).
+
+#### Running from a virtual Python environment installation
+
+If the AS you are testing has been installed in a virtual Python environment, as described in the [Development and Testing](https://github.com/5G-MAG/rt-5gms-application-server/wiki/Development-and-Testing) wiki page, then you would simply run the AS from the virtual environment using your local configuration file. For example:
+
+```bash
+cd ~/rt-5gms-application-server
+venv/bin/5gms-application-server -c local-dev.conf
+```
+
+#### Running a system wide AS installation
+
+If the Application Server under test has been installed as a system process, using a command like `sudo python3 -m pip install .` or `sudo python3 -m pip install rt-5gms-application-server-1.X.X.tar.gz`, then you can run the AS as root. For example:
+
+```bash
+sudo 5gms-application-server
+```
+
 ### To configure a simple HTTP Application Server
+
+Make sure the AS is running first (see ["Running the Application Server for testing with `m3_client_cli.py`"](#running-the-application-server-for-testing-with-m3-client-cli-py) above).
 
 ```bash
 cd ~/rt-5gms-application-server
@@ -167,6 +192,8 @@ tests/m3_client_cli.py -H localhost:7777 add ps1 tests/examples/ContentHostingCo
 This should respond with a "Success!" message, and NGINX should now be running on port 8080 using the example Big Buck Bunny configuration. You can check the NGINX configuration in `/tmp/rt_5gms_as.conf`.
 
 ### To configure an HTTPS Application Server
+
+Make sure the AS is running first (see ["Running the Application Server for testing with `m3_client_cli.py`"](#running-the-application-server-for-testing-with-m3-client-cli-py) above).
 
 This requires that the server certificate is pushed to the Application Server before the content hosting configuration is.
 
