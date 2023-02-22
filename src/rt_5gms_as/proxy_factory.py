@@ -40,6 +40,7 @@ isPresent() call.
 The selected WebProxyInterface class is held in proxy_factory.WebProxy.
 '''
 
+import aiofiles.os
 import asyncio
 import asyncio.subprocess
 import glob
@@ -47,7 +48,12 @@ import importlib
 import importlib.resources
 import logging
 import os.path
+import regex
 import time
+
+from typing import Any, List, Tuple, Callable
+
+from .utils import async_create_task
 
 __web_proxies = []
 
@@ -64,6 +70,9 @@ def list_registered_web_proxies():
     '''
     global __web_proxies
     return [cls for (cls,pri) in __web_proxies]
+
+class WebProxyError(Exception):
+    pass
 
 class WebProxyInterface(object):
     '''
@@ -236,6 +245,49 @@ class WebProxyInterface(object):
                 return False
         return True
 
+    async def purgeAll(self, provisioningSessionId: str) -> int:
+        '''Purge all cache entries for the provisioning session
+
+        Returns the number of items purged.
+        '''
+        self._context.appLog().debug('Purging all entries for %s...', provisioningSessionId)
+        return await self._purge(key_filter=lambda psid,path: psid==provisioningSessionId)
+
+    async def purgeUsingRegex(self, provisioningSessionId: str, re: str) -> int:
+        '''Purge cache entries for the provisioning session that match a regex
+
+        Returns the number of items purged.
+        '''
+        self._context.appLog().debug('Purging entries for %s using regex %s...', provisioningSessionId, re)
+        try:
+            comp_regex = regex.compile(re)
+        except regex.error as err:
+            self._context.appLog().error('Regex Exception while handling regex.compile: %s'%str(err))
+            raise err
+        except Exception as err:
+            self._context.appLog().error('Exception while handling regex.compile: %s'%str(err))
+            raise err
+        if comp_regex is None:
+            self._context.appLog().error('Regular expression %s failed to compile.', re)
+            raise WebProxyError('Regular expression "%s" failed to compile.'%re)
+        return await self._purge(key_filter=lambda psid,path: psid==provisioningSessionId and comp_regex.match(path) is not None)
+
+    async def purgeUsingPrefix(self, provisioningSessionId: str, prefix: str) -> int:
+        '''Purge cache entries for the provisioning session with a path prefix
+
+        Returns the number of items purged.
+        '''
+        self._context.appLog().debug('Purging entries for %s using URL path prefix %s...', provisioningSessionId, prefix)
+        return await self._purge(key_filter=lambda psid,path: psid==provisioningSessionId and path[:len(prefix)]==prefix)
+
+    async def purgePath(self, provisioningSessionId: str, purge_path: str) -> int:
+        '''Purge cache entries for the provisioning session that match a path
+
+        Returns the number of items purged.
+        '''
+        self._context.appLog().debug('Purging %s in %s...', purge_path, provisioningSessionId)
+        return self._purge(key_filter=lambda psid,path: psid==provisioningSessionId and path==purge_path)
+
     #### Protected methods ####
 
     async def _startDaemon(self, cmd, restart=True):
@@ -289,7 +341,7 @@ class WebProxyInterface(object):
         if self.__daemon['proc'] is None:
             return True
         try:
-            comm_task = asyncio.create_task(self.__daemon['proc'].communicate(), name='wait-for-web-proxy-daemon')
+            comm_task = async_create_task(self.__daemon['proc'].communicate(), name='wait-for-web-proxy-daemon')
             await asyncio.wait({comm_task}, timeout=timeout)
             self.__daemon['returncode'] = self.__daemon['proc'].returncode
             (stdout, stderr) = comm_task.result()
@@ -312,6 +364,45 @@ class WebProxyInterface(object):
             return False
         self.log.debug("WebProxy._wait() in Task %s finished", task_name)
         return True
+
+    async def _purge(self, key_filter: Callable[[str,str], bool]) -> int:
+        try:
+            to_purge = [file for (file,psid,urlpath) in await self._getCacheFilesAndKeys() if key_filter(psid,urlpath)]
+            self._context.appLog().debug('Matching cache entries: %r', to_purge)
+            if len(to_purge) > 0:
+                self._context.appLog().debug('Purging entries...')
+                await self._purgeCacheFiles(to_purge)
+                self._context.appLog().debug('Post purge actions...')
+                await self._postPurgeActions()
+        except Exception as err:
+            self._context.appLog().error('Error while purging cache: %s', str(err))
+            raise err
+        return len(to_purge)
+
+    async def _getCacheFilesAndKeys(self) -> List[Tuple[str,str,str]]:
+        '''Return a list of all cache files
+
+        The list returned consists of entries which are a tuple of the cache
+        file filepath, the provisioning session id and the url path, e.g.
+        (filepath, psid, urlpath)
+        '''
+        raise NotImplementedError()
+
+    async def _purgeCacheFiles(self, to_purge: List[str]):
+        '''Purge all cache files from the list
+
+        This default implementation simply deletes the files from the
+        filesystem.
+        '''
+        for f in to_purge:
+            await aiofiles.os.remove(f)
+
+    async def _postPurgeActions(self):
+        '''Perform post purge actions
+
+        This default implementation does nothing
+        '''
+        pass
 
     #### Private methods ####
 

@@ -5,11 +5,18 @@ backend-path = ["build_scripts"]
 
 [project]
 name = "rt-5gms-application-server"
-version = "1.0.1"
+version = "1.1.0"
 dependencies = [
     'urllib3 >= 1.25.3',
     'python-dateutil',
-    'regex >= 2.5.0'
+    'regex >= 2.5.0',
+    'hypercorn >= 0.14.3',
+    'fastapi >= 0.78.0',
+    'python-multipart >= 0.0.5',
+    'httpx[http2] >= 0.21.1',
+    'h11 >= 0.11.0',
+    'h2 >= 4.1.0',
+    'aiofiles >= 0.7.0'
 ]
 requires-python = ">=3.7"
 scripts = { 5gms-application-server = "rt_5gms_as.app:main" }
@@ -24,7 +31,7 @@ readme = "README.md"
 "Source" = "https://github.com/5g-mag/rt-5gms-application-server"
 
 [tool.setuptools.packages.find]
-where = ["src"]
+where = ["src", "tests"]
 
 [tool.setuptools.package-data]
 "rt_5gms_as.proxies" = ["*.tmpl"]
