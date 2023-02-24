@@ -92,7 +92,7 @@ After installing the prerequisites, you can install the 5GMS Application Server 
 
 ```
 cd ~/rt-5gms-application-server
-python3 -v venv venv
+python3 -m venv venv
 venv/bin/python3 -m pip install .
 ```
 
