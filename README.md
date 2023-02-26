@@ -20,7 +20,7 @@ daemon that can be controlled by the AS is nginx ([website](https://nginx.org/))
 
 ## Specifications
 
-A list of specification related to this repository is available [here](https://github.com/5G-MAG/Standards/blob/main/Specifications_5GMS.md)
+A list of specification related to this repository is available [here](https://github.com/5G-MAG/Standards/blob/main/Specifications_5GMS.md).
 
 ## Install dependencies
 
