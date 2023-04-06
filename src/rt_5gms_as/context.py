@@ -256,6 +256,8 @@ class Context(object):
 
         Return True if the certificate was added/updated.
         '''
+        if certificate_pem_text is None:
+            raise Context.ConfigError("Attempt to add a certificate with empty contents");
         return self.__addCertificate(certificate_id, certificate_pem_text, force = True)
 
     def updateCertificate(self, certificate_id: str, certificate_pem_text: str):
@@ -266,6 +268,8 @@ class Context(object):
 
         Return True if the certificate was added/updated, False if there was no change to the existing certificate.
         '''
+        if certificate_pem_text is None:
+            raise Context.ConfigError("Attempt to update certificate with empty contents");
         return self.__addCertificate(certificate_id, certificate_pem_text, force = False)
 
     def deleteCertificate(self, certificate_id: str):
@@ -292,7 +296,18 @@ class Context(object):
     class ConfigError(RuntimeError):
         '''Configuration Error Exception from the 5GMS AS Context
         '''
-        pass
+
+    class ValueError(RuntimeError):
+        '''Bad value passed in
+        '''
+        def __init__(self, msg: str, locn: str, *args, **kwargs):
+            super().__init__(msg, locn, *args, **kwargs)
+
+        def __str__(self):
+            return f"ValueError for {self.args[1]}: {self.args[0]}"
+
+        def __repr__(self):
+            return f'{self.__class__.__name__}({", ".join([repr(s) for s in self.args])})'
 
     #### Private methods ####
     def __find_config_file(self):
@@ -320,11 +335,17 @@ class Context(object):
         Returns True if the configuration was loaded, False if there was no
                 change.
         '''
-
+        # Sanity check the CHC
+        if chc is None:
+            raise Context.ValueError('ContentHostingConfiguration nbot given', '.')
+        if chc.ingest_configuration is None:
+            raise Context.ValueError('ContentHostingConfiguration must have an ingestConfiguration', 'ingestConfiguration')
+        if chc.distribution_configurations is None or not hasattr(chc.distribution_configurations, '__iter__'):
+            raise Context.ValueError('ContentHostingConfiguration must have a distributionConfigurations array', 'distributionConfigurations')
         # Validate the certificate IDs
         for distrib in chc.distribution_configurations:
             if distrib.certificate_id is not None and not self.haveCertificate(distrib.certificate_id):
-                raise Context.ConfigError('Certificate ID %s in ContentHostingConfiguration for provisioning session Id %s not found in certificates map'%(distrib.certificate_id, provisioning_session_id))
+                raise Context.ValueError('Certificate ID %s in ContentHostingConfiguration for provisioning session Id %s not found in certificates map'%(distrib.certificate_id, provisioning_session_id), 'distributionConfigurations.certificateId')
         # Update configuration
         chc_hash = self.__hashOpenAPIObject(chc)
         old_chc_hash = None
