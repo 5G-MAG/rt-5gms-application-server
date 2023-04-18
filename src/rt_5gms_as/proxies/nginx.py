@@ -324,8 +324,10 @@ class NginxWebProxy(WebProxyInterface):
                 sk = (dc.canonical_domain_name, certificate_filename)
                 if sk not in server_configs:
                     server_configs[sk] = NginxServerConfig(self._context, {dc.canonical_domain_name}, proxy_cache_path is not None, certificate_filename)
-                if dc.domain_name_alias is not None and dc.domain_name_alias not in server_configs:
-                    server_configs[(dc.domain_name_alias, certificate_filename is not None)] = NginxServerConfig(self._context, {dc.domain_name_alias}, proxy_cache_path is not None, certificate_filename)
+                if dc.domain_name_alias is not None:
+                    dsk = (dc.domain_name_alias, certificate_filename is not None)
+                    if dsk not in server_configs:
+                        server_configs[dsk] = NginxServerConfig(self._context, {dc.domain_name_alias}, proxy_cache_path is not None, certificate_filename)
                 base_url = urlparse(dc.base_url)
                 m4d_path_prefix = base_url.path
                 if m4d_path_prefix[0] != '/':
@@ -339,7 +341,7 @@ class NginxWebProxy(WebProxyInterface):
                             return False
                 server_configs[sk].addLocation(locn)
                 if dc.domain_name_alias is not None:
-                    server_configs[(dc.domain_name_alias, certificate_filename is not None)].addLocation(locn)
+                    server_configs[dsk].addLocation(locn)
         changed = True
         while changed:
             changed = False
