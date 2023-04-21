@@ -1,5 +1,8 @@
-include build_scripts/backend.py
-include build_scripts/generate_5gms_as_openapi
+recursive-include build_scripts *
+exclude build_scripts/openapi-generator-config.yaml
+exclude build_scripts/.git*
+recursive-exclude build_scripts/__pycache__ *
+recursive-include systemd *
 recursive-include external/rt-common-shared *
 exclude external/rt-common-shared/.git*
 recursive-exclude external/rt-common-shared/mbms *
