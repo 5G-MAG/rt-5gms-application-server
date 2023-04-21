@@ -58,13 +58,16 @@ def get_arg_parser():
 
     Syntax:
       rt-5gsm-as -h
+      rt-5gms-as -v
       rt-5gsm-as [-c <app-config-file>]
 
     Options:
       -h         --help           Show the help text
+      -v         --version        Display the version information for the AS
       -c CONFIG  --config CONFIG  The application configuration file
     '''
     parser = argparse.ArgumentParser()
+    parser.add_argument('-v', '--version', action='store_true', help='Display the version information')
     parser.add_argument('-c', '--config', nargs=1, required=False, metavar='CONFIG', help='The application configuration file')
     return parser
 
@@ -239,6 +242,11 @@ def main():
     # Parse command line options
     parser = get_arg_parser()
     args = parser.parse_args()
+
+    if args.version:
+        global __pkg_version
+        print(f'5G-MAG Reference Tools 5GMS Application Server version {__pkg_version}')
+        return 0
 
     # Create a logger instance
     log = logging.getLogger("rt-5gms-as")
