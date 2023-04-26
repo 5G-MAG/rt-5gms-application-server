@@ -106,6 +106,18 @@ Once [installed](#installing), the application server can be run using the follo
 Syntax: 5gms-application-server [-c <configuration-file>]
 ```
 
+Please note that the application server requires a suitable web proxy server to be installed. At present the only web proxy server that the application server can use is Nginx. This means you should install the nginx package on your distribution, for example:
+
+```bash
+apt -y install nginx
+```
+
+Most distributions will install Nginx to start on boot and some will even immediately start the Nginx service daemon when nginx is installed. A running default configuration of nginx will interfere with the operation of the application server by claiming TCP port 80 to listen on, thus denying the use of the TCP port to the application server. To avoid this it is best to disable and stop the nginx service, for example:
+
+```bash
+systemctl disable --now nginx.service
+```
+
 Command line help can be obtained using the -h flag:
 
 ```
