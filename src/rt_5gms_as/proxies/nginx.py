@@ -160,7 +160,11 @@ class NginxServerConfig(object):
             docroot = os.path.join(self.__context.getConfigVar('5gms_as','docroot'), master_host)
         self.docroot: str = docroot
         if not os.path.exists(docroot):
-            os.makedirs(docroot, mode=0o700)
+            old_umask = os.umask(0)
+            try:
+                os.makedirs(docroot, mode=0o755)
+            finally:
+                os.umask(old_umask)
             for copy_file in ['404.html', '50x.html']:
                 src = os.path.join('/usr/share/nginx/html', copy_file)
                 if os.path.exists(src):
@@ -255,8 +259,12 @@ class NginxWebProxy(WebProxyInterface):
             os.path.dirname(context.getConfigVar('5gms_as.nginx', 'pid_path', '')),
             ]:
             if directory is not None and len(directory) > 0 and not os.path.isdir(directory):
-                os.makedirs(directory)
-    
+                old_umask = os.umask(0)
+                try:
+                    os.makedirs(directory, mode=0o755)
+                finally:
+                    os.umask(old_umask)
+
     __nginx = None
     __last_nginx_check = None
 

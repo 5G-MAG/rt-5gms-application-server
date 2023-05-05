@@ -394,7 +394,11 @@ class Context(object):
             os.path.dirname(config.get('5gms_as', 'pid_path')),
             ]:
             if directory is not None and len(directory) > 0 and not os.path.isdir(directory):
-                os.makedirs(directory)
+                old_umask = os.umask(0)
+                try:
+                    os.makedirs(directory, mode=0o755)
+                finally:
+                    os.umake(old_umask)
         # get logging level from the configuration file
         logging_levels = {
                 'debug': logging.DEBUG,
