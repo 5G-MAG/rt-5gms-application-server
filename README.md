@@ -20,7 +20,7 @@ The web server or reverse proxy functionality is provided by an external daemon.
 daemon by dynamically writing its configuration files and managing the daemon process lifecycle. At present the only
 daemon that can be controlled by the AS is nginx ([website](https://nginx.org/)).
 
-## Specifications
+### Specifications
 
 A list of specification related to this repository is available in the [Standards Wiki](https://github.com/5G-MAG/Standards/wiki/5G-Downlink-Media-Streaming-Architecture-(5GMSd):-Relevant-Specifications).
 
