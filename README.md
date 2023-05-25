@@ -1,26 +1,28 @@
-# 5G-MAG Reference Tools: 5GMS Application Server
+# 5G-MAG Reference Tools: 5GMSd Application Server
 
-This repository holds the 5GMS Application Server implementation for the 5G-MAG Reference Tools.
+This repository holds the 5GMSd Application Server implementation for the 5G-MAG Reference Tools.
 
 ## Introduction
 
-The 5GMS application server (AS) is a Network Function that forms part of the 5G Media Services framework as defined in
-ETSI TS 126.501.
+The 5GMSd application server (AS) is a Network Function that forms part of the 5G Media Services framework as defined in
+ETSI TS 126.501. A 5GMSd Application Function (AF), which can be deployed in the 5G Core Network or in an External Data Network, is responsible for managing the 5GMSd System. The AF is a logical function which embodies the control plane aspects of the system, including provisioning, configuration, and reporting, among others. A 5GMSd Application Provider provisions 5GMSd functions using a RESTful HTTP-based provisioning interface at reference point M1d. Another RESTful HTTP-based configuration and reporting interface is exposed to UE-based 5GMSd clients at reference point M5d.
+
+### About the implementation
 
 This implementation is comprised of a small Python daemon process which implements the 5GMS AS configuration service at interface M3,
 and which also manages an external HTTP(S) Web Server/Proxy daemon subprocess to ingest content (pull ingest only) at interface M2d
-and serve it to 5GMS Clients at interface M4d.
+and serve it to 5GMSd Clients at interface M4d.
 
 The AS is configured via the M3 interface, therefore you will need an appropriate M3 client to configure the AS. Such a client is
-the [5GMS AF](https://github.com/5G-MAG/rt-5gms-application-function) (release v1.1.0 and above).
+the [5GMSd AF](https://github.com/5G-MAG/rt-5gms-application-function) (release v1.1.0 and above).
 
-The web server or reverse proxy functionality is provided by an external daemon. This 5GMS AS manages the external
+The web server or reverse proxy functionality is provided by an external daemon. This 5GMSd AS manages the external
 daemon by dynamically writing its configuration files and managing the daemon process lifecycle. At present the only
 daemon that can be controlled by the AS is nginx ([website](https://nginx.org/)).
 
 ## Specifications
 
-A list of specification related to this repository is available [here](https://github.com/5G-MAG/Standards/wiki/5G-Media-Streaming-Architecture-(5GMS):-Relevant-Specifications).
+A list of specification related to this repository is available in the [Standards Wiki](https://github.com/5G-MAG/Standards/wiki/5G-Media-Streaming-Architecture-(5GMSd):-Relevant-Specifications).
 
 ## Install dependencies
 
@@ -75,7 +77,7 @@ If installing as a unprivileged user, the installed files will be added to a loc
 
 ### Install direct from source
 
-Alternatively, to install the 5GMS Application Server directly from the source you will first need the build prerequisites, `wget` and `java`, indicated above in the [Prerequisites for building](#prerequisites-for-building) section. After installing these the application can bi install directly using these commands:
+Alternatively, to install the 5GMSd Application Server directly from the source you will first need the build prerequisites, `wget` and `java`, indicated above in the [Prerequisites for building](#prerequisites-for-building) section. After installing these the application can bi install directly using these commands:
 
 ```
 cd ~/rt-5gms-application-server
@@ -88,7 +90,7 @@ If you are testing out this project then you may wish to install in a Python vir
 
 You will need the `wget` and `java` prerequisites, see the [Prerequisites for building](#prerequisites-for-building) section above for details.
 
-After installing the prerequisites, you can install the 5GMS Application Server using the commands:
+After installing the prerequisites, you can install the 5GMSd Application Server using the commands:
 
 ```
 cd ~/rt-5gms-application-server
@@ -126,7 +128,7 @@ Command line help can be obtained using the -h flag:
 
 Please note that the default configuration will require the application server to be run as the root user as it uses the privileged port 80 and stores logs and caches in root owned directories. If you wish to run this as an unprivileged user you will need to follow the instructions for creating and using an alternative configuration file. These instructions can be found in the [development documentation](docs/README.md#running-the-example-without-building).
 
-Once running you will need an M3 client, such as the [Reference Tools 5GMS AF](https://github.com/5G-MAG/rt-5gms-application-function), to manage the running AS. For standalone configuration for testing, see the "Testing without the Application Function" section of the [development documentation](docs/README.md#testing-without-the-application-function).
+Once running you will need an M3 client, such as the [Reference Tools 5GMSd AF](https://github.com/5G-MAG/rt-5gms-application-function), to manage the running AS. For standalone configuration for testing, see the "Testing without the Application Function" section of the [development documentation](docs/README.md#testing-without-the-application-function).
 
 ## Development
 
