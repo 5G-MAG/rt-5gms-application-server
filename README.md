@@ -5,7 +5,7 @@ This repository holds the 5GMSd Application Server implementation for the 5G-MAG
 ## Introduction
 
 The 5GMSd application server (AS) is a Network Function that forms part of the 5G Media Services framework as defined in
-ETSI TS 126.501. A 5GMSd Application Function (AF), which can be deployed in the 5G Core Network or in an External Data Network, is responsible for managing the 5GMSd System. The AF is a logical function which embodies the control plane aspects of the system, including provisioning, configuration, and reporting, among others. A 5GMSd Application Provider provisions 5GMSd functions using a RESTful HTTP-based provisioning interface at reference point M1d. Another RESTful HTTP-based configuration and reporting interface is exposed to UE-based 5GMSd clients at reference point M5d.
+ETSI TS 126.501. A 5GMSd Application Server (AS), which can be deployed in the 5G Core Network or in an External Data Network, provides 5G Downlink Media Streaming services to 5GMSd clients. This logical function embodies the data plane aspects of the 5GMSd System that deals with media content (for instance, a Content Delivery Network). The content is ingested from 5GMSd Application Providers at reference point M2d. Both push- and pull-based ingest methods are supported, based on HTTP. The content is distributed to 5GMSd clients at reference point M4d (after possible manipulation by the 5GMSd AS). Standard pull-based content retrieval protocols (e.g. DASH) are supported at this reference point.
 
 ### About the implementation
 
@@ -22,7 +22,7 @@ daemon that can be controlled by the AS is nginx ([website](https://nginx.org/))
 
 ## Specifications
 
-A list of specification related to this repository is available in the [Standards Wiki](https://github.com/5G-MAG/Standards/wiki/5G-Media-Streaming-Architecture-(5GMSd):-Relevant-Specifications).
+A list of specification related to this repository is available in the [Standards Wiki](https://github.com/5G-MAG/Standards/wiki/5G-Downlink-Media-Streaming-Architecture-(5GMSd):-Relevant-Specifications).
 
 ## Install dependencies
 
