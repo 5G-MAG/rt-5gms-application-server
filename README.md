@@ -1,4 +1,4 @@
-# 5G-MAG Reference Tools: 5GMSd Application Server
+# 5GMSd Application Server
 
 This repository holds the 5GMSd Application Server implementation for the 5G-MAG Reference Tools.
 
