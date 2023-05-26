@@ -7,6 +7,10 @@ This repository holds the 5GMSd Application Server implementation for the 5G-MAG
 The 5GMSd application server (AS) is a Network Function that forms part of the 5G Media Services framework as defined in
 ETSI TS 126.501. A 5GMSd Application Server (AS), which can be deployed in the 5G Core Network or in an External Data Network, provides 5G Downlink Media Streaming services to 5GMSd clients. This logical function embodies the data plane aspects of the 5GMSd System that deals with media content (for instance, a Content Delivery Network). The content is ingested from 5GMSd Application Providers at reference point M2d. Both push- and pull-based ingest methods are supported, based on HTTP. The content is distributed to 5GMSd clients at reference point M4d (after possible manipulation by the 5GMSd AS). Standard pull-based content retrieval protocols (e.g. DASH) are supported at this reference point.
 
+### Specifications
+
+A list of specification related to this repository is available in the [Standards Wiki](https://github.com/5G-MAG/Standards/wiki/5G-Downlink-Media-Streaming-Architecture-(5GMSd):-Relevant-Specifications).
+
 ### About the implementation
 
 This implementation is comprised of a small Python daemon process which implements the 5GMS AS configuration service at interface M3,
@@ -19,10 +23,6 @@ the [5GMSd AF](https://github.com/5G-MAG/rt-5gms-application-function) (release 
 The web server or reverse proxy functionality is provided by an external daemon. This 5GMSd AS manages the external
 daemon by dynamically writing its configuration files and managing the daemon process lifecycle. At present the only
 daemon that can be controlled by the AS is nginx ([website](https://nginx.org/)).
-
-### Specifications
-
-A list of specification related to this repository is available in the [Standards Wiki](https://github.com/5G-MAG/Standards/wiki/5G-Downlink-Media-Streaming-Architecture-(5GMSd):-Relevant-Specifications).
 
 ## Install dependencies
 
