@@ -398,7 +398,7 @@ class Context(object):
                 try:
                     os.makedirs(directory, mode=0o755)
                 finally:
-                    os.umake(old_umask)
+                    os.umask(old_umask)
         # get logging level from the configuration file
         logging_levels = {
                 'debug': logging.DEBUG,
