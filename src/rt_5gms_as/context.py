@@ -63,6 +63,7 @@ fastcgi_temp = %(root_temp)s/fastcgi-tmp
 uwsgi_temp = %(root_temp)s/uwsgi-tmp
 scgi_temp = %(root_temp)s/scgi-tmp
 pid_path = %(root_temp)s/rt-5gms-as-nginx.pid
+resolvers = 127.0.0.53
 '''
 
 class Context(object):

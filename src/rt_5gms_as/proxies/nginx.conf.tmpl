@@ -45,11 +45,25 @@ http {{
   fastcgi_temp_path {fastcgi_temp_path};
   uwsgi_temp_path {uwsgi_temp_path};
   scgi_temp_path {scgi_temp_path};
+  lua_package_path "{scriptdir}/?.lua;;";
+  lua_shared_dict dynredirmap 10m;
+  resolver {resolvers};
 
   include             /etc/nginx/mime.types;
   default_type        application/octet-stream;
 
   server_names_hash_bucket_size 128; # this seems to be required for some vhosts
+
+  init_by_lua_block {{
+    dynredir = require "dynamicredirect"
+
+    math.randomseed(os.time())
+
+    function re_escape(s)
+      local ret = s:gsub("([]*^[%%.()])", "%%%1")
+      return ret
+    end
+  }}
 
 {server_configs}
 

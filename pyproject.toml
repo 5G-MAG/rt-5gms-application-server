@@ -34,7 +34,7 @@ readme = "README.md"
 where = ["src", "tests"]
 
 [tool.setuptools.package-data]
-"rt_5gms_as.proxies" = ["*.tmpl"]
+"rt_5gms_as.proxies" = ["*.tmpl", "*.lua"]
 
 [tool.setuptools.data-files]
 'share/doc/rt-5gms-application-server' = ['docs/*', 'ATTRIBUTION_NOTICE']

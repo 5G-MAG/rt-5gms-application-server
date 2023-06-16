@@ -16,6 +16,14 @@
   available at https://github.com/OpenAPITools/openapi-generator
   Licensed under Apache Software License v2.0 terms (https://www.apache.org/licenses/LICENSE-2.0)
 
+- openresty - Scalable Web Platform based on nginx
+  available at https://openresty.org/en/download.html
+  Parts licensed under various licenses:
+  - MIT License terms (https://github.com/urllib3/urllib3/blob/main/LICENSE.txt)  - Nginx, Inc. terms (https://trac.nginx.org/nginx/browser/nginx/docs/text/LICENSE)
+  - New BSD License terms (https://opensource.org/license/bsd-3-clause/)
+  - BSD License terms (https://opensource.org/license/bsd-2-clause/)
+  For full copyright and license terms see (https://openresty.org/download/Copyright-and-Licenses-for-3rd-Party-Open-Source-Projects.pdf)
+
 - nginx - HTTP server and proxy
   available from https://nginx.org/
   Licensed under Nginx, Inc. terms (https://trac.nginx.org/nginx/browser/nginx/docs/text/LICENSE)
