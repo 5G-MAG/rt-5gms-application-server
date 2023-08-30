@@ -20,6 +20,7 @@ Conflicts=nginx.service
 
 [Service]
 Type=simple
+Environment="PATH=/usr/local/openresty/nginx/sbin:/sbin:/bin:/usr/sbin:/usr/bin:/usr/local/sbin:/usr/local/bin:/snap/bin"
 EnvironmentFile=-/etc/default/rt-5gms-as
 ExecStart=/usr/local/bin/5gms-application-server
 ExecReload=kill -HUP $MAINPID

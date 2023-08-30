@@ -116,8 +116,8 @@ def exit_handler(sig, context):
     context.exitWithReturnCode(0)
 
 class AppJSONResponse(JSONResponse):
-    def __init__(self, *args, **kwargs):
-        super(AppJSONResponse,self).__init__(*args, **kwargs)
+    def __init__(self, *args, status_code=200, **kwargs):
+        super().__init__(*args, status_code=status_code, **kwargs)
         self.headers['Server'] = _app_server_hdr
 
 async def __app(context):

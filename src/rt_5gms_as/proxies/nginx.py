@@ -87,12 +87,30 @@ class NginxLocationConfig(object):
 
     async def config(self, indent: int = 0) -> str:
         prefix = ' ' * indent
-        ret = prefix + 'location %s {\n'%(self.path_prefix)
+        ret = f'''{prefix}location {self.path_prefix} {{
+{prefix}  set $downstream_prefix_url "{self.downstream_prefix_url}";
+{prefix}  set $location_prefix "{self.path_prefix}";
+'''
         for (regex, replace) in self.rewrite_rules:
-            ret += prefix + '  rewrite "%s" "%s" break;\n'
-        ret += prefix + '  proxy_cache_key "%s:u=$uri";\n'%self.provisioning_session
-        ret += prefix + '  proxy_pass %s;\n'%self.downstream_prefix_url
-        ret += prefix + '}\n'
+            ret += f'{prefix}  rewrite "{regex}" "{replace}" break;\n'
+        ret += f'''{prefix}  proxy_cache_key "{self.provisioning_session}:u=$uri";
+{prefix}  rewrite_by_lua_block {{
+{prefix}    -- ngx.log(ngx.DEBUG,"rewrite_by_lua_block(",ngx.var.uri,", ",ngx.var.downstream_prefix_url,")")
+{prefix}    local uri = ngx.var.uri
+{prefix}    if uri:sub(1,{len(self.path_prefix)}) == "{self.path_prefix}" then
+{prefix}      uri = uri:sub({len(self.path_prefix)})
+{prefix}    end
+{prefix}    -- ngx.log(ngx.DEBUG,"rewrite_by_lua_block: uri = ", uri)
+{prefix}    ngx.var.downstream_prefix_url,ngx.ctx.uri = dynredir.mapUrl("{self.path_prefix}", ngx.var.downstream_prefix_url, uri)
+{prefix}    ngx.req.set_uri(ngx.ctx.uri)
+{prefix}    ngx.var.downstream_prefix_url = ngx.var.downstream_prefix_url..ngx.ctx.uri:sub(2)
+{prefix}    -- ngx.log(ngx.DEBUG,"rewrite_by_lua_block: proxy=", ngx.var.downstream_prefix_url,", uri=",ngx.ctx.uri)
+{prefix}  }}
+{prefix}  proxy_pass $downstream_prefix_url;
+{prefix}  proxy_intercept_errors on;
+{prefix}  error_page 301 302 307 = @handle_redirect;
+{prefix}}}
+'''
         return ret
 
     def __transform_rewrite_rules(self, rule_regex, replace):
@@ -160,7 +178,11 @@ class NginxServerConfig(object):
             docroot = os.path.join(self.__context.getConfigVar('5gms_as','docroot'), master_host)
         self.docroot: str = docroot
         if not os.path.exists(docroot):
-            os.makedirs(docroot, mode=0o700)
+            old_umask = os.umask(0)
+            try:
+                os.makedirs(docroot, mode=0o755)
+            finally:
+                os.umask(old_umask)
             for copy_file in ['404.html', '50x.html']:
                 src = os.path.join('/usr/share/nginx/html', copy_file)
                 if os.path.exists(src):
@@ -169,37 +191,59 @@ class NginxServerConfig(object):
 
     async def config(self, indent: int = 0) -> str:
         prefix = ' ' * indent
-        ret  = prefix + 'server {\n'
         ssl_flag = ''
         if self.certificate_file is not None:
             ssl_flag = ' ssl'
-        ret += prefix + '  listen %i%s;\n'%(self.port, ssl_flag)
-        ret += prefix + '  listen [::]:%i%s;\n'%(self.port, ssl_flag)
-        ret += prefix + '  server_name %s;\n'%(' '.join(self.hostnames))
-        ret += prefix + '  root %s;\n'%(self.docroot)
-        ret += '\n'
+        ret  = f'''{prefix}server {{
+{prefix}  listen {self.port}{ssl_flag};
+{prefix}  listen [::]:{self.port}{ssl_flag};
+{prefix}  server_name {' '.join(self.hostnames)};
+{prefix}  root {self.docroot};
+
+'''
         if self.certificate_file is not None:
-            ret += prefix + '  ssl_certificate %s;\n'%self.certificate_file
-            ret += prefix + '  ssl_certificate_key %s;\n'%self.certificate_file
-            ret += '\n'
+            ret += f'''{prefix}  ssl_certificate {self.certificate_file};
+{prefix}  ssl_certificate_key {self.certificate_file};
+
+'''
         if self.use_cache:
-            ret += prefix + '  proxy_cache cacheone;\n'
-            ret += '\n'
+            ret += f'{prefix}  proxy_cache cacheone;\n\n'
         for locn in self.locations.values():
             ret += await locn.config(indent+2)
             ret += '\n'
+        ret += f'''{prefix}  location @handle_redirect {{
+{prefix}    rewrite_by_lua_block {{
+{prefix}      -- ngx.log(ngx.DEBUG,"rewrite_by_lua_block(",ngx.var.upstream_http_location,",",ngx.var.location_prefix,",",ngx.var.upstream_status,")")
+{prefix}      local matches = ngx.re.match(ngx.var.upstream_http_location, "(.*/)([^/].*)", "o")
+{prefix}      ngx.ctx.origin_redir_prefix = matches[1]
+{prefix}      local redir_object = matches[2]
+{prefix}      -- ngx.log(ngx.DEBUG, "ngx.ctx.origin_redir_prefix = '",ngx.ctx.origin_redir_prefix,"', redir_object = '",redir_object,"'")
+{prefix}      ngx.ctx.m4_redir_prefix = dynredir.get(ngx.var.location_prefix, ngx.ctx.origin_redir_prefix)
+{prefix}      ngx.redirect(ngx.ctx.m4_redir_prefix..redir_object, ngx.var.upstream_status)
+{prefix}    }}
+{prefix}    body_filter_by_lua_block {{
+{prefix}      -- ngx.log(ngx.DEBUG, "body_filter_by_lua_block(",ngx.ctx.origin_redir_prefix,",",ngx.ctx.m4_redir_prefix,")")
+{prefix}      if (ngx.arg[1]) then
+{prefix}        ngx.arg[1] = ngx.re.sub(ngx.arg[1], re_escape(ngx.ctx.origin_redir_prefix), ngx.ctx.m4_redir_prefix)
+{prefix}      end
+{prefix}    }}
+{prefix}  }}
+
+'''
         #ret += prefix + '  location / {\n'
         #ret += prefix + '    return 404;\n'
         #ret += prefix + '  }\n'
         #ret += '\n'
-        ret += prefix + '  error_page 404 /404.html;\n'
-        ret += prefix + '  location = /404.html {\n'
-        ret += prefix + '  }\n'
-        ret += '\n'
-        ret += prefix + '  error_page 500 502 503 504 /50x.html;\n'
-        ret += prefix + '  location = /50x.html {\n'
-        ret += prefix + '  }\n'
-        ret += prefix + '}\n'
+
+        ret += f'''{prefix}  error_page 404 /404.html;
+{prefix}  location = /404.html {{
+{prefix}  }}
+{prefix}
+{prefix}  error_page 500 502 503 504 /50x.html;
+{prefix}  location = /50x.html {{
+{prefix}  }}
+{prefix}}}
+'''
         return ret
 
     def addLocation(self, locn: NginxLocationConfig) -> None:
@@ -255,8 +299,12 @@ class NginxWebProxy(WebProxyInterface):
             os.path.dirname(context.getConfigVar('5gms_as.nginx', 'pid_path', '')),
             ]:
             if directory is not None and len(directory) > 0 and not os.path.isdir(directory):
-                os.makedirs(directory)
-    
+                old_umask = os.umask(0)
+                try:
+                    os.makedirs(directory, mode=0o755)
+                finally:
+                    os.umask(old_umask)
+
     __nginx = None
     __last_nginx_check = None
 
@@ -290,6 +338,7 @@ class NginxWebProxy(WebProxyInterface):
                file.
         '''
         config_file = self._context.getConfigVar('5gms_as.nginx','config_file')
+        resolvers = self._context.getConfigVar('5gms_as.nginx','resolvers')
         http_port = self._context.getConfigVar('5gms_as','http_port')
         error_log_path = self._context.getConfigVar('5gms_as','error_log')
         access_log_path = self._context.getConfigVar('5gms_as','access_log')
@@ -300,6 +349,7 @@ class NginxWebProxy(WebProxyInterface):
         fastcgi_temp_path = self._context.getConfigVar('5gms_as.nginx','fastcgi_temp')
         uwsgi_temp_path = self._context.getConfigVar('5gms_as.nginx','uwsgi_temp')
         scgi_temp_path = self._context.getConfigVar('5gms_as.nginx','scgi_temp')
+        scriptdir = os.path.dirname(os.path.abspath(__file__))
         # Create caching directives if we have a cache dir configured
         proxy_cache_path_directive = ''
         if proxy_cache_path is not None and len(proxy_cache_path) > 0:

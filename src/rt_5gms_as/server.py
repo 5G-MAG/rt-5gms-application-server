@@ -61,6 +61,7 @@ class M3Server:
             raise ProblemException(status_code=405, title='ContentHostingConfiguration Already Exists', instance=request.url.path)
         # Add the configuration to the current context
         self.__context.appLog().info("Adding content hosting configuration %s..."%(provisioningSessionId))
+        self.__context.appLog().debug("provisioning_session_id = %s, chc = %r", provisioningSessionId, content_hosting_configuration)
         try:
             self.__context.addContentHostingConfiguration(provisioningSessionId, content_hosting_configuration)
         except Context.ConfigError as err:

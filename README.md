@@ -12,7 +12,7 @@ A 5GMS Downlink Application Server (5GMSd AS), which can be deployed in the 5G C
 
 #### Specifications
 
-A list of specification related to 5G Downlink Media Streaming is available in the [Standards Wiki](https://github.com/5G-MAG/Standards/wiki/5G-Downlink-Media-Streaming-Architecture-(5GMSd):-Relevant-Specifications).
+A list of specifications related to 5G Downlink Media Streaming is available in the [Standards Wiki](https://github.com/5G-MAG/Standards/wiki/5G-Downlink-Media-Streaming-Architecture-(5GMSd):-Relevant-Specifications).
 
 #### About the implementation
 
@@ -25,7 +25,7 @@ the [5GMS AF](https://github.com/5G-MAG/rt-5gms-application-function) (release v
 
 The web server or reverse proxy functionality is provided by an external daemon. This 5GMSd AS manages the external
 daemon by dynamically writing its configuration files and managing the daemon process lifecycle. At present the only
-daemon that can be controlled by the AS is nginx ([website](https://nginx.org/)).
+daemon that can be controlled by the AS is Openresty (based on nginx) ([website](https://openresty.org/)).
 
 ## Install dependencies
 
@@ -111,11 +111,7 @@ Once [installed](#installing), the application server can be run using the follo
 Syntax: 5gms-application-server [-c <configuration-file>]
 ```
 
-Please note that the application server requires a suitable web proxy server to be installed. At present the only web proxy server that the application server can use is Nginx. This means you should install the nginx package on your distribution, for example:
-
-```bash
-apt -y install nginx
-```
+Please note that the application server requires a suitable web proxy server to be installed. At present the only web proxy server that the application server can use is Openresty. This means you should install the openresty package on your distribution, instruction to do so can be found on the [Openresty website](https://openresty.org/en/download.html) for [linux distributions](https://openresty.org/en/linux-packages.html) and [Microsoft Windows](https://openresty.org/en/download.html#windows).
 
 Most distributions will install Nginx to start on boot and some will even immediately start the Nginx service daemon when nginx is installed. A running default configuration of nginx will interfere with the operation of the application server by claiming TCP port 80 to listen on, thus denying the use of the TCP port to the application server. To avoid this it is best to disable and stop the nginx service, for example:
 
