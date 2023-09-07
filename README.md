@@ -111,13 +111,18 @@ Once [installed](#installing), the application server can be run using the follo
 Syntax: 5gms-application-server [-c <configuration-file>]
 ```
 
-Please note that the application server requires a suitable web proxy server to be installed. At present the only web proxy server that the application server can use is Openresty. This means you should install the openresty package on your distribution, instruction to do so can be found on the [Openresty website](https://openresty.org/en/download.html) for [linux distributions](https://openresty.org/en/linux-packages.html) and [Microsoft Windows](https://openresty.org/en/download.html#windows).
-
-Most distributions will install Nginx to start on boot and some will even immediately start the Nginx service daemon when nginx is installed. A running default configuration of nginx will interfere with the operation of the application server by claiming TCP port 80 to listen on, thus denying the use of the TCP port to the application server. To avoid this it is best to disable and stop the nginx service, for example:
+Please note that the application server requires a suitable web proxy server to be installed. At present the only web proxy server that the application server can use is Openresty. This means you should install the openresty package on your distribution, instruction to do so can be found on the [Openresty website](https://openresty.org/en/download.html) for [linux distributions](https://openresty.org/en/linux-packages.html) and [Microsoft Windows](https://openresty.org/en/download.html#windows). The Openresty version of nginx should also be the first version on the system path.
 
 ```bash
-systemctl disable --now nginx.service
+PATH="/usr/local/openresty/nginx/sbin:$PATH" export PATH
 ```
+
+Most distributions will install the Nginx service to start on boot and some will even immediately start the Nginx service daemon when nginx/openresty is installed. A running default configuration of nginx will interfere with the operation of the application server by claiming TCP port 80 to listen on, thus denying the use of the TCP port to the application server. To avoid this it is best to disable and stop the nginx and openresty services, for example:
+
+```bash
+systemctl disable --now nginx.service openresty.service
+```
+(If either of these services are not present then an error will be displayed, which is safe to ignore)
 
 Command line help can be obtained using the -h flag:
 
