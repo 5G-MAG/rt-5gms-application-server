@@ -48,6 +48,7 @@ http {{
   lua_package_path "{scriptdir}/?.lua;;";
   lua_shared_dict dynredirmap 10m;
   resolver {resolvers};
+  proxy_ssl_server_name on;
 
   include             /etc/nginx/mime.types;
   default_type        application/octet-stream;
