@@ -102,9 +102,9 @@ class NginxLocationConfig(object):
 {prefix}    end
 {prefix}    -- ngx.log(ngx.DEBUG,"rewrite_by_lua_block: uri = ", uri)
 {prefix}    ngx.var.downstream_prefix_url,ngx.ctx.uri = dynredir.mapUrl("{self.path_prefix}", ngx.var.downstream_prefix_url, uri)
-{prefix}    ngx.req.set_uri(ngx.ctx.uri)
+{prefix}    ngx.req.set_uri(uri)
 {prefix}    ngx.var.downstream_prefix_url = ngx.var.downstream_prefix_url..ngx.ctx.uri:sub(2)
-{prefix}    -- ngx.log(ngx.DEBUG,"rewrite_by_lua_block: proxy=", ngx.var.downstream_prefix_url,", uri=",ngx.ctx.uri)
+{prefix}    -- ngx.log(ngx.DEBUG,"rewrite_by_lua_block: proxy=", ngx.var.downstream_prefix_url,", uri=",uri)
 {prefix}  }}
 {prefix}  proxy_pass $downstream_prefix_url;
 {prefix}  proxy_intercept_errors on;
