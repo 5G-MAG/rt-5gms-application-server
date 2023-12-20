@@ -35,6 +35,12 @@ from typing import Optional
 
 from .openapi_5g.models.content_hosting_configuration import ContentHostingConfiguration
 
+def wrapped_default(self, obj):
+    return getattr(obj.__class__, "__jsontype__", getattr(obj.__class__, "__str__", wrapped_default.default))(obj)
+wrapped_default.default = json.JSONEncoder().default
+
+json.JSONEncoder.default = wrapped_default
+
 DEFAULT_CONFIG = '''[DEFAULT]
 log_dir = /var/log/rt-5gms
 run_dir = /run/rt-5gms
@@ -509,7 +515,13 @@ class Context(object):
         '''Create a consistent hash for an OpenAPI object'''
         # Just return the hash of the JSON serialization, use sort_keys=True for
         # consistency
-        return hash(obj.json(sort_keys=True))
+        if getattr(obj, "model_dump", None) is not None:
+            # pydantic v2 version
+            jsonstr = json.dumps(obj.model_dump(), sort_keys=True)
+        else:
+            # pydantic v1 version
+            jsonstr = obj.json(sort_keys=True)
+        return hash(jsonstr)
 
     @staticmethod
     def __hashConfigParser(config):

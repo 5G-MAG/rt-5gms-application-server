@@ -365,6 +365,8 @@ class NginxWebProxy(WebProxyInterface):
             if downstream_origin is None:
                 self.log.error("Configuration must have an ingestConfiguration.baseURL")
                 return False
+            if not isinstance(downstream_origin, str):
+                downstream_origin = str(downstream_origin)
             if downstream_origin[-1] == '/':
                 downstream_origin = downstream_origin[:-1]
             for dc in i.distribution_configurations:
@@ -378,7 +380,7 @@ class NginxWebProxy(WebProxyInterface):
                     dsk = (dc.domain_name_alias, certificate_filename is not None)
                     if dsk not in server_configs:
                         server_configs[dsk] = NginxServerConfig(self._context, {dc.domain_name_alias}, proxy_cache_path is not None, certificate_filename)
-                base_url = urlparse(dc.base_url)
+                base_url = urlparse(str(dc.base_url))
                 m4d_path_prefix = base_url.path
                 if m4d_path_prefix[0] != '/':
                     m4d_path_prefix = '/' + m4d_path_prefix
