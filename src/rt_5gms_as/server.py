@@ -155,7 +155,7 @@ class M3Server:
             else:
                 result = await self.__context.webProxy().purgeUsingRegex(provisioningSessionId, pattern)
         except regex.error as err:
-            raise ProblemException(title='Unprocessable Entity', status_code=422, instance=request.url.path, detail='Bad regex: '+str(err), invalid_params=[{'param': 'pattern', 'reason': str(err)}])
+            raise ProblemException(title='Unprocessable Entity', status_code=400, instance=request.url.path, detail='Bad regex: '+str(err), invalid_params=[{'param': 'pattern', 'reason': str(err)}])
         except WebProxyError as err:
             raise ProblemException(title='Internal Error', status_code=500, instance=request.url.path, detail='Regex failed to compile: '+str(err))
         except Exception as err:
