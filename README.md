@@ -1,11 +1,15 @@
-# 5GMS Application Server
-
-This repository holds the 5GMS Application Server implementation for the 5G-MAG Reference Tools. 
-Note that currently this implementation only supports downlink media streaming.
+<h1 align="center">5GMS Application Server</h1>
+<p align="center">
+  <img src="https://img.shields.io/github/v/tag/5G-MAG/rt-5gms-application-server?label=version" alt="Version">
+  <img src="https://img.shields.io/badge/Status-Under_Development-yellow" alt="Under Development">
+  <img src="https://img.shields.io/badge/License-5G--MAG%20Public%20License%20(v1.0)-blue" alt="License">
+</p>
 
 ## Introduction
 
 The 5GMS Application Server (AS) is a Network Function that forms part of the 5G Media Services framework as defined in ETSI TS 126.501.
+
+Additional information can be found at: https://5g-mag.github.io/Getting-Started/pages/5g-media-streaming/
 
 ### 5GMS Downlink Application Server
 A 5GMS Downlink Application Server (5GMSd AS), which can be deployed in the 5G Core Network or in an External Data Network, provides 5G Downlink Media Streaming services to 5GMSd Clients. This logical function embodies the data plane aspects of the 5GMSd System that deals with proxying media content (similar to a Content Delivery Network). The content is ingested from 5GMSd Application Providers at reference point M2d. Both push- and pull-based ingest methods are supported, based on HTTP. Ingested content is distributed to 5GMSd clients at reference point M4d (after possible manipulation by the 5GMSd AS). Standard pull-based content retrieval protocols (e.g. DASH) are supported at this reference point.
