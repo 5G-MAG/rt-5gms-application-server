@@ -130,14 +130,14 @@ Command line help can be obtained using the -h flag:
 5gms-application-server -h
 ```
 
-Please note that the default configuration will require the application server to be run as the root user as it uses the privileged port 80 and stores logs and caches in root owned directories. If you wish to run this as an unprivileged user you will need to follow the instructions for creating and using an alternative configuration file. These instructions can be found in the [development documentation](docs/README.md#running-the-example-without-building).
+Please note that the default configuration will require the application server to be run as the root user as it uses the privileged port 80 and stores logs and caches in root owned directories. If you wish to run this as an unprivileged user you will need to follow the instructions for creating and using an alternative configuration file. These instructions can be found in the [development documentation](https://5g-mag.github.io/Getting-Started/pages/5g-media-streaming/rt-5gms-application-server/development.html#running-the-example-without-building).
 
-Once running you will need an M3 client, such as the [5GMS AF](https://github.com/5G-MAG/rt-5gms-application-function), to manage the running AS. For standalone configuration for testing, see the "Testing without the Application Function" section of the [development documentation](docs/README.md#testing-without-the-application-function).
+Once running you will need an M3 client, such as the [5GMS AF](https://github.com/5G-MAG/rt-5gms-application-function), to manage the running AS. For standalone configuration for testing, see the "Testing without the Application Function" section of the [development documentation](https://5g-mag.github.io/Getting-Started/pages/5g-media-streaming/rt-5gms-application-server/development.html#testing-without-the-application-function).
 
 ## Development
 
 This project follows
 the [Gitflow workflow](https://www.atlassian.com/git/tutorials/comparing-workflows/gitflow-workflow). The `development`
 branch of this project serves as an integration branch for new features. Consequently, please make sure to switch to the `development`
-branch before starting the implementation of a new feature. Please check the [docs/README.md](docs/README.md) file for
+branch before starting the implementation of a new feature. Please check this [page](https://5g-mag.github.io/Getting-Started/pages/5g-media-streaming/rt-5gms-application-server/development.html) file for
 further project development and testing information.
