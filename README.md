@@ -14,11 +14,7 @@ Additional information can be found at: https://5g-mag.github.io/Getting-Started
 ### 5GMS Downlink Application Server
 A 5GMS Downlink Application Server (5GMSd AS), which can be deployed in the 5G Core Network or in an External Data Network, provides 5G Downlink Media Streaming services to 5GMSd Clients. This logical function embodies the data plane aspects of the 5GMSd System that deals with proxying media content (similar to a Content Delivery Network). The content is ingested from 5GMSd Application Providers at reference point M2d. Both push- and pull-based ingest methods are supported, based on HTTP. Ingested content is distributed to 5GMSd clients at reference point M4d (after possible manipulation by the 5GMSd AS). Standard pull-based content retrieval protocols (e.g. DASH) are supported at this reference point.
 
-#### Specifications
-
-A list of specifications related to 5G Downlink Media Streaming is available in the [Standards Wiki](https://github.com/5G-MAG/Standards/wiki/5G-Downlink-Media-Streaming-Architecture-(5GMSd):-Relevant-Specifications).
-
-#### About the implementation
+### About the implementation
 
 This implementation is comprised of a small Python daemon process which implements the 5GMS AS configuration service at interface M3,
 and which also manages an external HTTP(S) Web Server/Proxy daemon subprocess to ingest content (pull ingest only) at interface M2d
