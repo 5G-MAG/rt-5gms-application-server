@@ -349,6 +349,12 @@ class NginxWebProxy(WebProxyInterface):
         fastcgi_temp_path = self._context.getConfigVar('5gms_as.nginx','fastcgi_temp')
         uwsgi_temp_path = self._context.getConfigVar('5gms_as.nginx','uwsgi_temp')
         scgi_temp_path = self._context.getConfigVar('5gms_as.nginx','scgi_temp')
+        nginx_module_includes = '\n'.join([f'include\t{p}/*.conf;' for p in ['/usr/share/nginx/modules'] if os.path.isdir(p)])
+        mime_types_file = 'mime.types'
+        for mtf in ['/usr/local/openresty/nginx/conf/mime.types', '/etc/nginx/mime.types']:
+            if os.path.isfile(mtf):
+                mime_types_file = mtf
+                break
         scriptdir = os.path.dirname(os.path.abspath(__file__))
         # Create caching directives if we have a cache dir configured
         proxy_cache_path_directive = ''

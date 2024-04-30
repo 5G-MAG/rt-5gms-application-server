@@ -19,7 +19,7 @@ error_log	{error_log_path};
 pid		{pid_path};
 worker_rlimit_nofile 8192;
 
-include /usr/share/nginx/modules/*.conf;
+{nginx_module_includes}
 
 events {{
   worker_connections 4096;
@@ -50,7 +50,7 @@ http {{
   resolver {resolvers};
   proxy_ssl_server_name on;
 
-  include             /etc/nginx/mime.types;
+  include             {mime_types_file};
   default_type        application/octet-stream;
 
   server_names_hash_bucket_size 128; # this seems to be required for some vhosts
