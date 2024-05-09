@@ -1,20 +1,20 @@
-# 5GMS Application Server
-
-This repository holds the 5GMS Application Server implementation for the 5G-MAG Reference Tools. 
-Note that currently this implementation only supports downlink media streaming.
+<h1 align="center">5GMS Application Server</h1>
+<p align="center">
+  <a href="#"><img src="https://img.shields.io/badge/Status-Under_Development-yellow" alt="Under Development"></a>
+  <a href="https://github.com/5G-MAG/rt-5gms-application-server/releases/latest"><img src="https://img.shields.io/github/v/release/5G-MAG/rt-5gms-application-server?label=Version" alt="Version"></a>
+  <a href="https://drive.google.com/file/d/1cinCiA778IErENZ3JN52VFW-1ffHpx7Z/view"><img src="https://img.shields.io/badge/License-5G--MAG%20Public%20License%20(v1.0)-blue" alt="License"></a>
+</p>
 
 ## Introduction
 
 The 5GMS Application Server (AS) is a Network Function that forms part of the 5G Media Services framework as defined in ETSI TS 126.501.
 
+Additional information can be found at: https://5g-mag.github.io/Getting-Started/pages/5g-media-streaming/
+
 ### 5GMS Downlink Application Server
 A 5GMS Downlink Application Server (5GMSd AS), which can be deployed in the 5G Core Network or in an External Data Network, provides 5G Downlink Media Streaming services to 5GMSd Clients. This logical function embodies the data plane aspects of the 5GMSd System that deals with proxying media content (similar to a Content Delivery Network). The content is ingested from 5GMSd Application Providers at reference point M2d. Both push- and pull-based ingest methods are supported, based on HTTP. Ingested content is distributed to 5GMSd clients at reference point M4d (after possible manipulation by the 5GMSd AS). Standard pull-based content retrieval protocols (e.g. DASH) are supported at this reference point.
 
-#### Specifications
-
-A list of specifications related to 5G Downlink Media Streaming is available in the [Standards Wiki](https://github.com/5G-MAG/Standards/wiki/5G-Downlink-Media-Streaming-Architecture-(5GMSd):-Relevant-Specifications).
-
-#### About the implementation
+### About the implementation
 
 This implementation is comprised of a small Python daemon process which implements the 5GMS AS configuration service at interface M3,
 and which also manages an external HTTP(S) Web Server/Proxy daemon subprocess to ingest content (pull ingest only) at interface M2d
@@ -130,14 +130,14 @@ Command line help can be obtained using the -h flag:
 5gms-application-server -h
 ```
 
-Please note that the default configuration will require the application server to be run as the root user as it uses the privileged port 80 and stores logs and caches in root owned directories. If you wish to run this as an unprivileged user you will need to follow the instructions for creating and using an alternative configuration file. These instructions can be found in the [development documentation](docs/README.md#running-the-example-without-building).
+Please note that the default configuration will require the application server to be run as the root user as it uses the privileged port 80 and stores logs and caches in root owned directories. If you wish to run this as an unprivileged user you will need to follow the instructions for creating and using an alternative configuration file. These instructions can be found in the [development documentation](https://5g-mag.github.io/Getting-Started/pages/5g-media-streaming/usage/application-server/development-AS.html#running-the-example-without-building).
 
-Once running you will need an M3 client, such as the [5GMS AF](https://github.com/5G-MAG/rt-5gms-application-function), to manage the running AS. For standalone configuration for testing, see the "Testing without the Application Function" section of the [development documentation](docs/README.md#testing-without-the-application-function).
+Once running you will need an M3 client, such as the [5GMS AF](https://github.com/5G-MAG/rt-5gms-application-function), to manage the running AS. For standalone configuration for testing, see the "Testing without the Application Function" section of the [development documentation](https://5g-mag.github.io/Getting-Started/pages/5g-media-streaming/usage/application-server/development-AS.html#testing-without-the-application-function).
 
 ## Development
 
 This project follows
 the [Gitflow workflow](https://www.atlassian.com/git/tutorials/comparing-workflows/gitflow-workflow). The `development`
 branch of this project serves as an integration branch for new features. Consequently, please make sure to switch to the `development`
-branch before starting the implementation of a new feature. Please check the [docs/README.md](docs/README.md) file for
+branch before starting the implementation of a new feature. Please check this [page](https://5g-mag.github.io/Getting-Started/pages/5g-media-streaming/usage/application-server/development-AS.html) file for
 further project development and testing information.
