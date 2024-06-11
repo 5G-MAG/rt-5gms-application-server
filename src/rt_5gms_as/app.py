@@ -22,14 +22,18 @@ Reference Tools: 5GMS Application Server
 
 This NF provides the configuration interface for an external web proxy daemon.
 '''
+import logging
 import os
 import os.path
+
+logging.basicConfig(level=logging.INFO)
 
 # Promote known Openresty locations to the head of the PATH environment variable
 openresty_bin_dir=None
 for d in ['/usr/local/openresty/nginx/sbin']:
     if os.path.isdir(d):
         openresty_bin_dir=d
+        logging.getLogger("rt-5gms-as").info(f"Found OpenResty path at {openresty_bin_dir}, will try this path first for nginx executable location")
         break
 if openresty_bin_dir is not None:
     os.environ['PATH'] = ':'.join([openresty_bin_dir] + [p for p in os.environ['PATH'].split(':') if p != openresty_bin_dir])
@@ -38,7 +42,6 @@ import argparse
 import asyncio
 import hypercorn
 import hypercorn.asyncio
-import logging
 import pkg_resources
 import signal
 import sys

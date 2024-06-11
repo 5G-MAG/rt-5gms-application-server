@@ -354,6 +354,7 @@ class NginxWebProxy(WebProxyInterface):
         for mtf in ['/usr/local/openresty/nginx/conf/mime.types', '/etc/nginx/mime.types']:
             if os.path.isfile(mtf):
                 mime_types_file = mtf
+                self.log.info(f"Found mime.types file at {mime_types_file}")
                 break
         scriptdir = os.path.dirname(os.path.abspath(__file__))
         # Create caching directives if we have a cache dir configured
