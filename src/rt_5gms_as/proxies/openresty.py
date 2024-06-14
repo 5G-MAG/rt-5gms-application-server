@@ -3,10 +3,10 @@
 # 5G-MAG Reference Tools: 5GMS Application Server
 # ===============================================
 #
-# File: proxies/nginx.py
+# File: proxies/openresty.py
 # License: 5G-MAG Public License (v1.0)
 # Author: David Waring
-# Copyright: (C) 2022 British Broadcasting Corporation
+# Copyright: (C) 2022-2024 British Broadcasting Corporation
 #
 # For full license terms please see the LICENSE file distributed with this
 # program. If this file is missing then the license can be retrieved from
@@ -14,7 +14,7 @@
 #
 # This is the 5G-MAG Reference Tools 5GMS AS nginx web proxy handling module.
 #
-# This provides the NginxWebProxy class and registers it with the proxy_factory.
+# This provides the OpenRestyWebProxy class and registers it with the proxy_factory.
 #
 '''
 nginx WebProxyInterface module
@@ -26,6 +26,7 @@ reverse proxy.
 import aiofiles
 import datetime
 import importlib.resources
+import logging
 import os
 import os.path
 import regex
@@ -41,7 +42,7 @@ from ..proxy_factory import WebProxyInterface, add_web_proxy
 from ..utils import find_executable_on_path, traverse_directory_tree
 from ..context import Context
 
-class NginxLocationConfig(object):
+class OpenRestyLocationConfig(object):
     '''
     Class to hold and compare location configurations
     '''
@@ -68,7 +69,7 @@ class NginxLocationConfig(object):
         self.rewrite_rules += [(regex, replace)]
         return True
 
-    def __eq__(self, other: "NginxLocationConfig") -> bool:
+    def __eq__(self, other: "OpenRestyLocationConfig") -> bool:
         if self.path_prefix != other.path_prefix:
             return False
         if self.provisioning_session != other.provisioning_session:
@@ -82,7 +83,7 @@ class NginxLocationConfig(object):
                 return False
         return True
 
-    def __ne__(self, other: "NginxLocationConfig") -> bool:
+    def __ne__(self, other: "OpenRestyLocationConfig") -> bool:
         return not self == other
 
     async def config(self, indent: int = 0) -> str:
@@ -155,7 +156,7 @@ class NginxLocationConfig(object):
 
         return (rule_regex, replace)
 
-class NginxServerConfig(object):
+class OpenRestyServerConfig(object):
     '''
     Class to hold and compare server configurations
     '''
@@ -167,7 +168,7 @@ class NginxServerConfig(object):
             self.port: int = int(self.__context.getConfigVar('5gms_as','https_port'))
         else:
             self.port: int = int(self.__context.getConfigVar('5gms_as','http_port'))
-        self.locations: Dict[str,NginxLocationConfig] = {}
+        self.locations: Dict[str,OpenRestyLocationConfig] = {}
         self.use_cache: bool = use_cache
         if docroot is None:
             master_hosts = [host for host in hostnames if host not in ['localhost', '127.0.0.1']]
@@ -246,14 +247,14 @@ class NginxServerConfig(object):
 '''
         return ret
 
-    def addLocation(self, locn: NginxLocationConfig) -> None:
+    def addLocation(self, locn: OpenRestyLocationConfig) -> None:
         if locn.path_prefix in self.locations:
             if locn != self.locations[locn.path_prefix]:
                 raise RuntimeError('Conflicting locations with the same path prefix: '+locn.path_prefix)
         else:
             self.locations[locn.path_prefix] = locn
 
-    def sameLocations(self, other: "NginxServerConfig") -> bool:
+    def sameLocations(self, other: "OpenRestyServerConfig") -> bool:
         if len(self.locations) != len(other.locations):
             return False
         for a in self.locations:
@@ -261,7 +262,7 @@ class NginxServerConfig(object):
                 return False
         return True
 
-    def mergeServer(self, other: "NginxServerConfig") -> bool:
+    def mergeServer(self, other: "OpenRestyServerConfig") -> bool:
         if self.use_cache != other.use_cache:
             return False
         if self.docroot != other.docroot:
@@ -279,7 +280,7 @@ class NginxServerConfig(object):
         self.hostnames.update(other.hostnames)
         return True
 
-class NginxWebProxy(WebProxyInterface):
+class OpenRestyWebProxy(WebProxyInterface):
     '''
     WebProxyInterface class to handle the nginx web server
     '''
@@ -317,7 +318,9 @@ class NginxWebProxy(WebProxyInterface):
         if cls.__nginx is None or cls.__last_nginx_check is None or cls.__last_nginx_check + datetime.timedelta(seconds=5) < now:
             # Only recheck if its been more than 5 seconds after the last check
             cls.__last_nginx_check = now
-            cls.__nginx = find_executable_on_path("nginx")
+            cls.__nginx = find_executable_on_path("nginx", verify=cls.__ensure_modules, extra_paths=['/usr/local/openresty/nginx/sbin'])
+            if cls.__nginx is not None:
+                logging.getLogger(cls.__name__).info(f"Found nginx executable supporting LUA at {cls.__nginx}")
         return cls.__nginx is not None
 
     @classmethod
@@ -325,7 +328,7 @@ class NginxWebProxy(WebProxyInterface):
         '''
         Return nginx name
         '''
-        return "nginx"
+        return "openresty"
 
     async def writeConfiguration(self):
         '''
@@ -356,13 +359,16 @@ class NginxWebProxy(WebProxyInterface):
                 mime_types_file = mtf
                 self.log.info(f"Found mime.types file at {mime_types_file}")
                 break
+        else:
+            self.log.error("Could not find the mime.types file")
+            raise FileNotFoundError
         scriptdir = os.path.dirname(os.path.abspath(__file__))
         # Create caching directives if we have a cache dir configured
         proxy_cache_path_directive = ''
         if proxy_cache_path is not None and len(proxy_cache_path) > 0:
             proxy_cache_path_directive = 'proxy_cache_path %s levels=1:2 use_temp_path=on keys_zone=cacheone:10m;'%proxy_cache_path
         # Create the server configurations from the CHCs
-        server_configs: Dict[Tuple[str,Optional[str]], NginxServerConfig] = {}
+        server_configs: Dict[Tuple[str,Optional[str]], OpenRestyServerConfig] = {}
         for provisioning_session_id in self._context.getProvisioningSessionIds():
             i = self._context.findContentHostingConfigurationByProvisioningSession(provisioning_session_id)
             if not i.ingest_configuration.pull or i.ingest_configuration.protocol != 'urn:3gpp:5gms:content-protocol:http-pull-ingest':
@@ -382,18 +388,18 @@ class NginxWebProxy(WebProxyInterface):
                     certificate_filename = self._context.getCertificateFilename(dc.certificate_id)
                 sk = (dc.canonical_domain_name, certificate_filename)
                 if sk not in server_configs:
-                    server_configs[sk] = NginxServerConfig(self._context, {dc.canonical_domain_name}, proxy_cache_path is not None, certificate_filename)
+                    server_configs[sk] = OpenRestyServerConfig(self._context, {dc.canonical_domain_name}, proxy_cache_path is not None, certificate_filename)
                 if dc.domain_name_alias is not None:
                     dsk = (dc.domain_name_alias, certificate_filename is not None)
                     if dsk not in server_configs:
-                        server_configs[dsk] = NginxServerConfig(self._context, {dc.domain_name_alias}, proxy_cache_path is not None, certificate_filename)
+                        server_configs[dsk] = OpenRestyServerConfig(self._context, {dc.domain_name_alias}, proxy_cache_path is not None, certificate_filename)
                 base_url = urlparse(str(dc.base_url))
                 m4d_path_prefix = base_url.path
                 if m4d_path_prefix[0] != '/':
                     m4d_path_prefix = '/' + m4d_path_prefix
                 if m4d_path_prefix[-1] != '/':
                     m4d_path_prefix += '/'
-                locn = NginxLocationConfig(self._context, m4d_path_prefix, downstream_origin, provisioning_session_id)
+                locn = OpenRestyLocationConfig(self._context, m4d_path_prefix, downstream_origin, provisioning_session_id)
                 if dc.path_rewrite_rules is not None:
                     for rr in dc.path_rewrite_rules:
                         if not locn.addRewriteRule(rr.request_path_pattern, rr.mapped_path):
@@ -538,6 +544,13 @@ class NginxWebProxy(WebProxyInterface):
     def __key_to_prov_sess_and_url_path(self, key: str) -> Tuple[str,str]:
         return tuple(key.split(':u='))
 
+    @classmethod
+    def __ensure_modules(cls, cmd):
+        ret = subprocess.run([cmd,'-V'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=False)
+        if ret.returncode == 0 and 'ngx_lua' in (ret.stdout.decode('utf-8')+ret.stderr.decode('utf-8')):
+            return True
+        return False
+
     def __check_nginx_flags(self,cmd,flags):
         '''Check if the command will take the command line flags
 
@@ -557,4 +570,4 @@ class NginxWebProxy(WebProxyInterface):
         return args
 
 # Register as a WebProxyInterface class with highest priority
-add_web_proxy(NginxWebProxy,1)
+add_web_proxy(OpenRestyWebProxy,1)

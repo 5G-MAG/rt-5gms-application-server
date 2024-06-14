@@ -30,17 +30,21 @@ from typing import Any, Callable, Awaitable
 
 __all__ = ['find_executable_on_path', 'traverse_directory_tree', 'async_create_task']
 
-def find_executable_on_path(cmd):
+def find_executable_on_path(cmd, *, verify=None, extra_paths=None):
     '''Find an executable command on the current $PATH
 
     Return the str path to the cmd or None if the command doesn't exist.
     '''
-    # Uses the external `which` command.
-    # TODO: this will need enhancing to work on non-unix based systems
-    result = subprocess.run(['which', cmd], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    if result.returncode != 0:
-        return None
-    return result.stdout.decode("utf-8").strip()
+    paths = os.environ['PATH'].split(':')
+    if extra_paths is not None:
+        paths += extra_paths
+    for path in paths:
+        fpath=os.path.join(path,cmd)
+        if os.path.isfile(fpath) and os.access(fpath, os.X_OK, follow_symlinks=True):
+            if verify is not None and not verify(fpath):
+                continue
+            return fpath
+    return None
 
 def async_create_task(*args, **kwargs):
     'Wrapper for asyncio.create_task to remove unimplemented kwargs'
