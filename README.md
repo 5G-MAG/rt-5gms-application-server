@@ -35,8 +35,8 @@ sudo python3 -m pip install --upgrade pip build setuptools
 ```
 
 The Application Server requires a suitable web proxy server to be installed. At present the only web proxy server that
-the Application Server can use is Openresty. This means you should install the Openresty package on your distribution,
-instruction to do so can be found on the [Openresty website](https://openresty.org/en/download.html)
+the Application Server can use is Openresty. This means you should install the Openresty package on your distribution.
+Instructions on how to do so can be found on the [Openresty website](https://openresty.org/en/download.html)
 for [linux distributions](https://openresty.org/en/linux-packages.html)
 and [Microsoft Windows](https://openresty.org/en/download.html#windows). The Openresty version of nginx should also be
 the first version on the system path:
