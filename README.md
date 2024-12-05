@@ -7,15 +7,15 @@
 
 ## Introduction
 
-The 5GMS Application Server (AS) is a Network Function that forms part of the 5G Media Services framework as defined in
-ETSI TS 126.501.
+The 5GMS Application Server (AS) is a Network Function that forms part of the 5G Media Streaming framework as defined
+in ETSI TS 126.501.
 
 Additional information can be found at: https://5g-mag.github.io/Getting-Started/pages/5g-media-streaming/
 
-### 5GMS Downlink Application Server
+### 5GMSd AS
 
-A 5GMS Downlink Application Server (5GMSd AS), which can be deployed in the 5G Core Network or in an External Data
-Network, provides 5G Downlink Media Streaming services to 5GMSd Clients. This logical function embodies the data plane
+A downlink 5GMS Application Server (5GMSd AS), which can be deployed in the Trusted Data Network or in an External Data
+Network, provides downlink 5G Media Streaming services to 5GMSd Clients. This logical function embodies the data plane
 aspects of the 5GMSd System that deals with proxying media content (similar to a Content Delivery Network). The content
 is ingested from 5GMSd Application Providers at reference point M2d. Both push- and pull-based ingest methods are
 supported, based on HTTP. Ingested content is distributed to 5GMSd clients at reference point M4d (after possible
@@ -25,23 +25,23 @@ reference point.
 ### About the implementation
 
 This implementation is comprised of a small Python daemon process which implements the 5GMS AS configuration service at
-interface M3,
+reference poont M3,
 and which also manages an external HTTP(S) Web Server/Proxy daemon subprocess to ingest content (pull ingest only) at
-interface M2d
-and serve it to 5GMSd Clients at interface M4d.
+reference point M2d
+and serve it to 5GMSd Clients at reference point M4d.
 
-The 5GMSd AS is configured via the M3 interface, therefore you will need an appropriate M3 client to configure the 5GMSd
-AS. Such a client is
-the [5GMS AF](https://github.com/5G-MAG/rt-5gms-application-function) (release v1.1.0 and above).
+The 5GMSd AS is configured via a RESTful network API at reference point M3, therefore you will need an appropriate M3
+client to configure the 5GMSd AS. Such a client is the
+[5GMS AF](https://github.com/5G-MAG/rt-5gms-application-function) (release v1.1.0 and above).
 
-The web server or reverse proxy functionality is provided by an external daemon. This 5GMSd AS manages the external
-daemon by dynamically writing its configuration files and managing the daemon process lifecycle. At present the only
-daemon that can be controlled by the AS is Openresty (based on nginx) ([website](https://openresty.org/)).
+The web server or reverse proxy functionality is provided by an external daemon process. This 5GMSd AS manages the
+external daemon by dynamically writing its configuration files and managing the daemon process lifecycle. At present,
+the only daemon that can be controlled by the AS is Openresty (based on nginx) ([website](https://openresty.org/)).
 
-## Docker Setup
+## Docker setup
 
-A Docker Compose based setup of the Application Server and the Application Function can be found in
-the [rt-5gms-examples](https://github.com/5G-MAG/rt-5gms-examples/tree/development/5gms-docker-setup) project.
+A setup comprising the 5GMSd AF and 5GMSd AS based on Docker Compose can be found in the
+[rt-5gms-examples](https://github.com/5G-MAG/rt-5gms-examples/tree/development/5gms-docker-setup) project.
 
 ## Install dependencies
 
@@ -85,7 +85,7 @@ sudo apt install wget default-jdk
 
 ### Building a distribution tar
 
-To build a Python sdist distribution tar do the following.
+To build a Python sdist distribution tar do the following:
 
 ```
 cd ~/rt-5gms-application-server
