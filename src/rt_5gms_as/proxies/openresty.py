@@ -96,16 +96,16 @@ class OpenRestyLocationConfig(object):
             ret += f'{prefix}  rewrite "{regex}" "{replace}" break;\n'
         ret += f'''{prefix}  proxy_cache_key "{self.provisioning_session}:u=$uri";
 {prefix}  rewrite_by_lua_block {{
-{prefix}    -- ngx.log(ngx.DEBUG,"rewrite_by_lua_block(",ngx.var.uri,", ",ngx.var.downstream_prefix_url,")")
+{prefix}    ngx.log(ngx.DEBUG,"rewrite_by_lua_block(",ngx.var.uri,", ",ngx.var.downstream_prefix_url,")")
 {prefix}    local uri = ngx.var.uri
 {prefix}    if uri:sub(1,{len(self.path_prefix)}) == "{self.path_prefix}" then
 {prefix}      uri = uri:sub({len(self.path_prefix)})
 {prefix}    end
-{prefix}    -- ngx.log(ngx.DEBUG,"rewrite_by_lua_block: uri = ", uri)
+{prefix}    ngx.log(ngx.DEBUG,"rewrite_by_lua_block: uri = ", uri)
 {prefix}    ngx.var.downstream_prefix_url,ngx.ctx.uri = dynredir.mapUrl("{self.path_prefix}", ngx.var.downstream_prefix_url, uri)
 {prefix}    ngx.req.set_uri(uri)
 {prefix}    ngx.var.downstream_prefix_url = ngx.var.downstream_prefix_url..ngx.ctx.uri:sub(2)
-{prefix}    -- ngx.log(ngx.DEBUG,"rewrite_by_lua_block: proxy=", ngx.var.downstream_prefix_url,", uri=",uri)
+{prefix}    ngx.log(ngx.DEBUG,"rewrite_by_lua_block: proxy=", ngx.var.downstream_prefix_url,", uri=",uri)
 {prefix}  }}
 {prefix}  proxy_pass $downstream_prefix_url;
 {prefix}  proxy_intercept_errors on;
@@ -214,16 +214,16 @@ class OpenRestyServerConfig(object):
             ret += '\n'
         ret += f'''{prefix}  location @handle_redirect {{
 {prefix}    rewrite_by_lua_block {{
-{prefix}      -- ngx.log(ngx.DEBUG,"rewrite_by_lua_block(",ngx.var.upstream_http_location,",",ngx.var.location_prefix,",",ngx.var.upstream_status,")")
+{prefix}      ngx.log(ngx.DEBUG,"rewrite_by_lua_block(",ngx.var.upstream_http_location,",",ngx.var.location_prefix,",",ngx.var.upstream_status,")")
 {prefix}      local matches = ngx.re.match(ngx.var.upstream_http_location, "(.*/)([^/].*)", "o")
 {prefix}      ngx.ctx.origin_redir_prefix = matches[1]
 {prefix}      local redir_object = matches[2]
-{prefix}      -- ngx.log(ngx.DEBUG, "ngx.ctx.origin_redir_prefix = '",ngx.ctx.origin_redir_prefix,"', redir_object = '",redir_object,"'")
+{prefix}      ngx.log(ngx.DEBUG, "ngx.ctx.origin_redir_prefix = '",ngx.ctx.origin_redir_prefix,"', redir_object = '",redir_object,"'")
 {prefix}      ngx.ctx.m4_redir_prefix = dynredir.get(ngx.var.location_prefix, ngx.ctx.origin_redir_prefix)
 {prefix}      ngx.redirect(ngx.ctx.m4_redir_prefix..redir_object, ngx.var.upstream_status)
 {prefix}    }}
 {prefix}    body_filter_by_lua_block {{
-{prefix}      -- ngx.log(ngx.DEBUG, "body_filter_by_lua_block(",ngx.ctx.origin_redir_prefix,",",ngx.ctx.m4_redir_prefix,")")
+{prefix}      ngx.log(ngx.DEBUG, "body_filter_by_lua_block(",ngx.ctx.origin_redir_prefix,",",ngx.ctx.m4_redir_prefix,")")
 {prefix}      if (ngx.arg[1]) then
 {prefix}        ngx.arg[1] = ngx.re.sub(ngx.arg[1], re_escape(ngx.ctx.origin_redir_prefix), ngx.ctx.m4_redir_prefix)
 {prefix}      end
