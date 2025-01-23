@@ -22,8 +22,8 @@ scriptdir=`dirname "$0"`
 scriptdir=`cd "$scriptdir"; pwd`
 
 rt_5gms_as_dir=`cd "${scriptdir}/../src/rt_5gms_as"; pwd`
-common_scripts_dir=`cd "${scriptdir}/../external/rt-common-shared/5gms/scripts"; pwd`
-fiveg_apis_overrides=`cd "$common_scripts_dir/../5G_APIs-overrides"; pwd`
+common_scripts_dir=`cd "${scriptdir}/../external/rt-common-shared/open5gs-tools/scripts"; pwd`
+fiveg_apis_overrides=`cd "$common_scripts_dir/../5G_APIs-overrides"; pwd`':'`cd "${scriptdir}/../external/rt-common-shared/5gms/5G_APIs-overrides"; pwd`
 
 # Command line defaults
 default_api='TS26512_M1_ContentHostingProvisioning M3_merged'
