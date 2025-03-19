@@ -181,8 +181,6 @@ the [development documentation](https://5g-mag.github.io/Getting-Started/pages/5
 This project follows
 the [Gitflow workflow](https://www.atlassian.com/git/tutorials/comparing-workflows/gitflow-workflow). The `development`
 branch of this project serves as an integration branch for new features. Consequently, please make sure to switch to the
-`development`
-branch before starting the implementation of a new feature. Please check
-this [page](https://5g-mag.github.io/Getting-Started/pages/5g-media-streaming/usage/application-server/testing-AS.html)
-file for
+`development` branch before starting the implementation of a new feature. Please check this
+[page](https://5g-mag.github.io/Getting-Started/pages/5g-media-streaming/usage/application-server/testing-AS.html) for
 further project development and testing information.
