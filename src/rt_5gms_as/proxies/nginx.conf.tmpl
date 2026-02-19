@@ -56,6 +56,9 @@ http {{
   server_names_hash_bucket_size 128; # this seems to be required for some vhosts
 
   init_by_lua_block {{
+    local dict = ngx.shared.cmcd_cfg
+    dict:set("collector_event_url", "http://10.64.39.13:3000/cmcd/response-mode")
+	
     dynredir = require "dynamicredirect"
 
     math.randomseed(os.time())
@@ -65,6 +68,28 @@ http {{
       return ret
     end
   }}
+  
+	# ===============================
+	# CMCD → event-mode JSON
+	# ===============================
+	location ^~ /media/ {
+		rewrite_by_lua_block {
+			ngx.log(ngx.ERR, "INLINE REWRITE HIT: ", ngx.var.request_uri)
+			dofile("/usr/local/openresty/nginx/lua/cmcd_response_json.lua")
+			}
+			
+		content_by_lua_block {
+			ngx.exit(204)
+		}
+	}
+  
+	rewrite_by_lua_block {
+		ngx.log(ngx.ERR, "SERVER REWRITE HIT: ", ngx.var.request_uri)
+	}
+		
+	log_by_lua_block {
+		ngx.log(ngx.ERR, "LOG PHASE HIT: ", ngx.var.request_uri)
+	}
 
 {server_configs}
 
