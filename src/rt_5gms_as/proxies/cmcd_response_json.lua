@@ -69,8 +69,7 @@ local function extract_v1()
 
   -- 3) Parse CMCD* request headers (v1 key/value format)
   local hdrs = ngx.req.get_headers()
-  for _, hk in ipairs({"CMCD","CMCD-Object","CMCD-Request","CMCD-Status","CMCD-Session",
-                       "cmcd","cmcd-object","cmcd-request","cmcd-status","cmcd-session"}) do
+  for _, hk in ipairs({"cmcd", "cmcd-object", "cmcd-request", "cmcd-status", "cmcd-session"}) do
     local hv = hdrs[hk]
     if hv then
       if type(hv)=="table" then
@@ -163,7 +162,7 @@ local function build_origin_headers_in_request()
   if not origin or origin == "" then
     local scheme = ngx.var.scheme or "http"
     local host   = ngx.var.server_name or ngx.var.host or ngx.var.server_addr or "127.0.0.1"
-    local port   = (dict and dict:get("spoof_origin_port")) or "8080"
+    local port   = (dict and dict:get("spoof_origin_port")) or "8080"  -- Todo: make it configurable next
     origin = string.format("%s://%s:%s", scheme, host, port)
   end
   if not referer or referer == "" then
@@ -178,7 +177,7 @@ end
 local function async_post_json(premature, url, payload, extra_headers)
   if premature then return end
   local httpc = http.new()
-  httpc:set_timeout(1500)
+  httpc:set_timeout(3000)  -- Todo: make it configurable next
   local body = cjson.encode(payload)
 
   -- Build request headers inside timer context(ngx.req / ngx.var are not available here)
