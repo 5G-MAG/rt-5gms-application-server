@@ -106,6 +106,14 @@ class OpenRestyLocationConfig(object):
 {prefix}    ngx.req.set_uri(uri)
 {prefix}    ngx.var.downstream_prefix_url = ngx.var.downstream_prefix_url..ngx.ctx.uri:sub(2)
 {prefix}    -- ngx.log(ngx.DEBUG,"rewrite_by_lua_block: proxy=", ngx.var.downstream_prefix_url,", uri=",uri)
+
+{prefix}    -- [CMCD MERGE] Execute CMCD handler per request (safe-guarded)
+{prefix}    if cmcdHandle and cmcdHandle.handle then
+{prefix}      local ok, err = pcall(cmcdHandle.handle)
+{prefix}      if not ok then
+{prefix}        ngx.log(ngx.ERR, "[cmcd] handle() failed: ", err)
+{prefix}      end
+{prefix}    end
 {prefix}  }}
 {prefix}  proxy_pass $downstream_prefix_url;
 {prefix}  proxy_intercept_errors on;
@@ -363,10 +371,16 @@ class OpenRestyWebProxy(WebProxyInterface):
             self.log.error("Could not find the mime.types file")
             raise FileNotFoundError
         scriptdir = os.path.dirname(os.path.abspath(__file__))
+
+        # [CMCD MERGE] Provide template variables (safe defaults: empty string => no-op in template)
+        #cmcd_collector_event_url = self._context.getConfigVar('5gms_as', 'cmcd_collector_event_url', '')
+        cmcd_collector_event_url = "http://10.64.39.13:3000/cmcd/response-mode"
+
         # Create caching directives if we have a cache dir configured
         proxy_cache_path_directive = ''
         if proxy_cache_path is not None and len(proxy_cache_path) > 0:
             proxy_cache_path_directive = 'proxy_cache_path %s levels=1:2 use_temp_path=on keys_zone=cacheone:10m;'%proxy_cache_path
+
         # Create the server configurations from the CHCs
         server_configs: Dict[Tuple[str,Optional[str]], OpenRestyServerConfig] = {}
         for provisioning_session_id in self._context.getProvisioningSessionIds():

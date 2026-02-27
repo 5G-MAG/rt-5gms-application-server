@@ -15,8 +15,8 @@
 #
 
 worker_processes 5;
-error_log	{error_log_path};
-pid		{pid_path};
+error_log    {error_log_path};
+pid        {pid_path};
 worker_rlimit_nofile 8192;
 
 {nginx_module_includes}
@@ -47,6 +47,7 @@ http {{
   scgi_temp_path {scgi_temp_path};
   lua_package_path "{scriptdir}/?.lua;;";
   lua_shared_dict dynredirmap 10m;
+  lua_shared_dict cmcd_cfg 1m;
   resolver {resolvers};
   proxy_ssl_server_name on;
 
@@ -56,10 +57,15 @@ http {{
   server_names_hash_bucket_size 128; # this seems to be required for some vhosts
 
   init_by_lua_block {{
-    local dict = ngx.shared.cmcd_cfg
-    dict:set("collector_event_url", "http://10.64.39.13:3000/cmcd/response-mode")  #Todo: make the url configurable next
-	
     dynredir = require "dynamicredirect"
+
+    # [CMCD MERGE] init CMCD config into shared dict (values provided by openresty.py)
+    local dict = ngx.shared.cmcd_cfg
+    if dict then
+	  if "{cmcd_collector_event_url}" ~= "" then
+		  dict:set("collector_event_url", "{cmcd_collector_event_url}")
+      end
+    end
 
     math.randomseed(os.time())
 
@@ -68,28 +74,14 @@ http {{
       return ret
     end
   }}
-  
-	# ===============================
-	# CMCD → event-mode JSON
-	# ===============================
-	location ^~ /media/ {
-		rewrite_by_lua_block {
-			ngx.log(ngx.ERR, "INLINE REWRITE HIT: ", ngx.var.request_uri)
-			dofile("/usr/local/openresty/nginx/lua/cmcd_response_json.lua")
-			}
-			
-		content_by_lua_block {
-			ngx.exit(204)
-		}
-	}
-  
-	rewrite_by_lua_block {
-		ngx.log(ngx.ERR, "SERVER REWRITE HIT: ", ngx.var.request_uri)
-	}
-		
-	log_by_lua_block {
-		ngx.log(ngx.ERR, "LOG PHASE HIT: ", ngx.var.request_uri)
-	}
+
+  # [CMCD MERGE] Load cmcd_response_json in worker init (NOT in init_by_lua_block) to avoid
+  # module cache pollution across reloads and master/worker lifecycle.
+  init_worker_by_lua_block {{
+    package.loaded["cmcd_response_json"] = nil
+    cmcdHandle = require "cmcd_response_json"
+    ngx.log(ngx.ERR, "[cmcd] init_worker loaded type=", type(cmcdHandle))
+  }}
 
 {server_configs}
 
