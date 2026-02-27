@@ -1,26 +1,27 @@
 
-#==============================================================================
-# 5G-MAG Reference Tools: Build & POST CMCD v2 (response-mode) JSON
-#==============================================================================
-#
-# File: cmcd_response_json.lua
-# License: 5G-MAG Public License (v1.0)
-# Author: Shilin Ding
-# Copyright: (C) 2026 Qualcomm Corporation
-#
-# For full license terms please see the LICENSE file distributed with this
-# program. If this file is missing then the license can be retrieved from
-# https://drive.google.com/file/d/1cinCiA778IErENZ3JN52VFW-1ffHpx7Z/view
-#
-# This is the 5G-MAG Reference Tools 5GMS AS application context module.
-# This file handles the class which will hold the current run-time context of
-# the AS.
-#==============================================================================
+--==============================================================================
+-- 5G-MAG Reference Tools: Build & POST CMCD v2 (response-mode) JSON
+--==============================================================================
+--
+-- File: cmcd_response_json.lua
+-- License: 5G-MAG Public License (v1.0)
+-- Author: Shilin Ding
+-- Copyright: (C) 2026 Qualcomm Corporation
+--
+-- For full license terms please see the LICENSE file distributed with this
+-- program. If this file is missing then the license can be retrieved from
+-- https://drive.google.com/file/d/1cinCiA778IErENZ3JN52VFW-1ffHpx7Z/view
+--
+-- This is the 5G-MAG Reference Tools 5GMS AS application context module.
+-- This file handles the class which will hold the current run-time context of
+-- the AS.
+--==============================================================================
+
+local _M = {}
 
 local cjson = require "cjson.safe"
 local http  = require "resty.http"
 
-ngx.log(ngx.NOTICE, ">>> CMCD LUA (response-mode) TRIGGERED <<<")
 
 -- ---------------- parse CMCD v1 k/v (from query & headers) ----------------
 local function parse_kv(s)
@@ -205,39 +206,50 @@ local function async_post_json(premature, url, payload, extra_headers)
 end
 
 -- ---------------- main ----------------
-local v1 = extract_v1()
-if next(v1) then
-  local dict = ngx.shared.cmcd_cfg
-  local url  = dict and (dict:get("collector_response_url") or dict:get("collector_event_url"))
-  if not url or url == "" then
-    ngx.log(ngx.ERR, "[cmcd][response] collector url not configured")
-    return
-  end
-  url = (url:gsub("/+$",""))
-  if not url:match("/cmcd/response%-mode$") then
-    url = url:gsub("/cmcd/event%-mode$","/cmcd/response-mode")
-    if not url:match("/cmcd/response%-mode$") then
-      url = url .. "/cmcd/response-mode"
+local function main()
+  local v1 = extract_v1()
+  if next(v1) then
+    local dict = ngx.shared.cmcd_cfg
+    local url  = dict and (dict:get("collector_response_url") or dict:get("collector_event_url"))
+    if not url or url == "" then
+      ngx.log(ngx.ERR, "[cmcd][response] collector url not configured")
+      return
     end
-  end
+    url = (url:gsub("/+$",""))
+    if not url:match("/cmcd/response%-mode$") then
+      url = url:gsub("/cmcd/event%-mode$","/cmcd/response-mode")
+      if not url:match("/cmcd/response%-mode$") then
+        url = url .. "/cmcd/response-mode"
+      end
+    end
 
-  local resp = build_response_v2(v1)
-  if not resp then
-    return
-  end
+    local resp = build_response_v2(v1)
+    if not resp then
+      return
+    end
+    
+    -- NOTE: Extract Origin/Referer before scheduling the timer
+    --       since ngx.req / ngx.var are unavailable inside timer callbacks
+    local origin_headers = build_origin_headers_in_request()
+
+    ngx.log(ngx.NOTICE, "[cmcd][response] v2 payload = ", cjson.encode(resp))
   
-  -- NOTE: Extract Origin/Referer before scheduling the timer
-  --       since ngx.req / ngx.var are unavailable inside timer callbacks
-  local origin_headers = build_origin_headers_in_request()
-
-  ngx.log(ngx.NOTICE, "[cmcd][response] v2 payload = ", cjson.encode(resp))
- 
-  -- Schedule async POST with URL, payload and pre-built headers
-  -- Do not access ngx.req / ngx.var inside the timer callback
-  local ok, err = ngx.timer.at(0, async_post_json, url, resp, origin_headers)
-  if not ok then
-    ngx.log(ngx.ERR, "[cmcd][response] failed to schedule post timer: ", err or "nil")
+    -- Schedule async POST with URL, payload and pre-built headers
+    -- Do not access ngx.req / ngx.var inside the timer callback
+    local ok, err = ngx.timer.at(0, async_post_json, url, resp, origin_headers)
+    if not ok then
+      ngx.log(ngx.ERR, "[cmcd][response] failed to schedule post timer: ", err or "nil")
+    end
+  else
+    ngx.log(ngx.WARN, "[cmcd][response] no CMCD found: ", ngx.var.request_uri or "")
   end
-else
-  ngx.log(ngx.WARN, "[cmcd][response] no CMCD found: ", ngx.var.request_uri or "")
 end
+
+
+function _M.handle()
+  ngx.log(ngx.NOTICE, ">>> CMCD LUA (response-mode) TRIGGERED v0.3 <<<") 
+  
+  return main()
+end
+
+return _M
