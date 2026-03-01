@@ -62,8 +62,8 @@ http {{
     # [CMCD MERGE] init CMCD config into shared dict (values provided by openresty.py)
     local dict = ngx.shared.cmcd_cfg
     if dict then
-	  if "{cmcd_collector_event_url}" ~= "" then
-		  dict:set("collector_event_url", "{cmcd_collector_event_url}")
+	  if "{cmcd_collector_url}" ~= "" then
+		  dict:set("cmcd_collector_url", "{cmcd_collector_url}")
       end
     end
 

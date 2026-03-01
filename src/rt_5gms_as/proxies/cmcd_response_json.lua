@@ -205,24 +205,37 @@ local function async_post_json(premature, url, payload, extra_headers)
   end
 end
 
+-- ---------------- get cmcd collector url ----------------
+local function get_cmcd_collector_url()
+  local dict = ngx.shared.cmcd_cfg
+  local url  = dict and dict:get("cmcd_collector_url") 
+  if not url or url == "" then
+    return
+  end
+
+  url = (url:gsub("/+$",""))
+  if not url:match("/cmcd/response%-mode$") then
+    url = url:gsub("/cmcd/event%-mode$","/cmcd/response-mode")
+    if not url:match("/cmcd/response%-mode$") then
+      url = url .. "/cmcd/response-mode"
+    end
+  end
+
+  return url
+end
+
 -- ---------------- main ----------------
 local function main()
+  -- if cmcd collector url is not configured, cmcd reporting won't be enabled
+  local url = get_cmcd_collector_url()
+  if not url or url == "" then
+    ngx.log(ngx.NOTICE, "[cmcd][response] Collector url is not configured, cmcd reporting won't be enabled!")
+    return
+  end
+  ngx.log(ngx.NOTICE, "[cmcd][response] collector_url resolved to: ", url)
+
   local v1 = extract_v1()
   if next(v1) then
-    local dict = ngx.shared.cmcd_cfg
-    local url  = dict and (dict:get("collector_response_url") or dict:get("collector_event_url"))
-    if not url or url == "" then
-      ngx.log(ngx.ERR, "[cmcd][response] collector url not configured")
-      return
-    end
-    url = (url:gsub("/+$",""))
-    if not url:match("/cmcd/response%-mode$") then
-      url = url:gsub("/cmcd/event%-mode$","/cmcd/response-mode")
-      if not url:match("/cmcd/response%-mode$") then
-        url = url .. "/cmcd/response-mode"
-      end
-    end
-
     local resp = build_response_v2(v1)
     if not resp then
       return
@@ -247,7 +260,7 @@ end
 
 
 function _M.handle()
-  ngx.log(ngx.NOTICE, ">>> CMCD LUA (response-mode) TRIGGERED v0.3 <<<") 
+  ngx.log(ngx.NOTICE, ">>> CMCD LUA (response-mode) TRIGGERED v0.4 <<<") 
   
   return main()
 end

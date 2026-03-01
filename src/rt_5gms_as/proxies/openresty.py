@@ -108,10 +108,12 @@ class OpenRestyLocationConfig(object):
 {prefix}    -- ngx.log(ngx.DEBUG,"rewrite_by_lua_block: proxy=", ngx.var.downstream_prefix_url,", uri=",uri)
 
 {prefix}    -- [CMCD MERGE] Execute CMCD handler per request (safe-guarded)
-{prefix}    if cmcdHandle and cmcdHandle.handle then
-{prefix}      local ok, err = pcall(cmcdHandle.handle)
-{prefix}      if not ok then
-{prefix}        ngx.log(ngx.ERR, "[cmcd] handle() failed: ", err)
+{prefix}    if uri:find("%.m4s$") or uri:find("%.mpd$") then
+{prefix}      if cmcdHandle and cmcdHandle.handle then
+{prefix}        local ok, err = pcall(cmcdHandle.handle)
+{prefix}        if not ok then
+{prefix}          ngx.log(ngx.ERR, "[cmcd] handle() failed: ", err)
+{prefix}        end
 {prefix}      end
 {prefix}    end
 {prefix}  }}
@@ -373,8 +375,7 @@ class OpenRestyWebProxy(WebProxyInterface):
         scriptdir = os.path.dirname(os.path.abspath(__file__))
 
         # [CMCD MERGE] Provide template variables (safe defaults: empty string => no-op in template)
-        #cmcd_collector_event_url = self._context.getConfigVar('5gms_as', 'cmcd_collector_event_url', '')
-        cmcd_collector_event_url = "http://10.64.39.13:3000/cmcd/response-mode"
+        cmcd_collector_url = self._context.getConfigVar('5gms_as', 'cmcd_collector_url', '')
 
         # Create caching directives if we have a cache dir configured
         proxy_cache_path_directive = ''

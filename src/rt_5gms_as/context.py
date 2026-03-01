@@ -55,6 +55,7 @@ http_port = 80
 https_port = 443
 m3_listen = localhost
 m3_port = 7777
+cmcd_collector_url = http://10.64.39.13:3000/cmcd/response-mode
 
 access_log = %(log_dir)s/application-server-access.log
 error_log = %(log_dir)s/application-server-error.log
