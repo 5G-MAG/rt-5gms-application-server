@@ -17,6 +17,13 @@
 -- the AS.
 --==============================================================================
 
+--==============================================================================
+-- If cmcd_collector_url is configured in cmcd_collector_url,
+-- then CMCD reporting will be enabled, with converting the v1 data to v2 format and forwarding to cmcd_collector_url;
+-- If cmcd_collector_url isn't configured in cmcd_collector_url,
+-- CMCD reporting will be disabled.(disabled by default)
+--==============================================================================
+
 local _M = {}
 
 local cjson = require "cjson.safe"
@@ -229,10 +236,10 @@ local function main()
   -- if cmcd collector url is not configured, cmcd reporting won't be enabled
   local url = get_cmcd_collector_url()
   if not url or url == "" then
-    ngx.log(ngx.NOTICE, "[cmcd][response] Collector url is not configured, cmcd reporting won't be enabled!")
+    ngx.log(ngx.NOTICE, "[cmcd][response] Collector url is not configured, CMCD reporting won't be enabled!")
     return
   end
-  ngx.log(ngx.NOTICE, "[cmcd][response] collector_url resolved to: ", url)
+  ngx.log(ngx.NOTICE, "[cmcd][response] CMCD reporting is enabled. collector_url resolved to: ", url)
 
   local v1 = extract_v1()
   if next(v1) then
