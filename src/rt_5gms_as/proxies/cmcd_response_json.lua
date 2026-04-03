@@ -18,9 +18,9 @@
 --==============================================================================
 
 --==============================================================================
--- If cmcd_collector_url is configured in cmcd_collector_url,
--- then CMCD reporting will be enabled, with converting the v1 data to v2 format and forwarding to cmcd_collector_url;
--- If cmcd_collector_url isn't configured in cmcd_collector_url,
+-- If cmcd_collector_url is configured in context.py,
+-- then CMCD reporting will be enabled, with converting v1 data to v2 format and forwarding to CMCD collector;
+-- If cmcd_collector_url isn't configured in cmcd_collector_url(leave it null),
 -- CMCD reporting will be disabled.(disabled by default)
 --==============================================================================
 

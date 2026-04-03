@@ -108,7 +108,7 @@ class OpenRestyLocationConfig(object):
 {prefix}    -- ngx.log(ngx.DEBUG,"rewrite_by_lua_block: proxy=", ngx.var.downstream_prefix_url,", uri=",uri)
 
 {prefix}    -- [CMCD MERGE] Execute CMCD handler per request (safe-guarded)
-{prefix}    if uri:find("%.m4s$") or uri:find("%.mpd$") then
+{prefix}    if uri:find("%.m4s$") or uri:find("%.mp4$") or uri:find("%.m4v$") or uri:find("%.m4a$") or uri:find("%.mpd$") then
 {prefix}      if cmcdHandle and cmcdHandle.handle then
 {prefix}        local ok, err = pcall(cmcdHandle.handle)
 {prefix}        if not ok then
@@ -374,7 +374,6 @@ class OpenRestyWebProxy(WebProxyInterface):
             raise FileNotFoundError
         scriptdir = os.path.dirname(os.path.abspath(__file__))
 
-        # [CMCD MERGE] Provide template variables (safe defaults: empty string => no-op in template)
         cmcd_collector_url = self._context.getConfigVar('5gms_as', 'cmcd_collector_url', '')
 
         # Create caching directives if we have a cache dir configured

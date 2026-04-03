@@ -59,7 +59,6 @@ http {{
   init_by_lua_block {{
     dynredir = require "dynamicredirect"
 
-    # [CMCD MERGE] init CMCD config into shared dict (values provided by openresty.py)
     local dict = ngx.shared.cmcd_cfg
     if dict then
 	  if "{cmcd_collector_url}" ~= "" then
@@ -75,8 +74,6 @@ http {{
     end
   }}
 
-  # [CMCD MERGE] Load cmcd_response_json in worker init (NOT in init_by_lua_block) to avoid
-  # module cache pollution across reloads and master/worker lifecycle.
   init_worker_by_lua_block {{
     package.loaded["cmcd_response_json"] = nil
     cmcdHandle = require "cmcd_response_json"
