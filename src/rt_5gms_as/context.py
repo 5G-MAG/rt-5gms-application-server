@@ -60,7 +60,7 @@ m3_port = 7777
 # Set this to enable CMCD reporting
 # Format: cmcd_collector_url = http://<collector-host>:<port>/cmcd/response-mode
 # e.g.: cmcd_collector_url = http://10.64.39.13:3000/cmcd/response-mode
-cmcd_collector_url = 
+cmcd_collector_url = http://10.64.39.13:3000/cmcd/response-mode
 
 access_log = %(log_dir)s/application-server-access.log
 error_log = %(log_dir)s/application-server-error.log
