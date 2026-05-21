@@ -6,3 +6,4 @@ recursive-include systemd *
 recursive-include external/rt-common-shared *
 exclude external/rt-common-shared/.git*
 recursive-exclude external/rt-common-shared/mbms *
+recursive-include src/rt_5gms_as/proxies *.lua
