@@ -1,6 +1,5 @@
-
 --==============================================================================
--- 5G-MAG Reference Tools: Build & POST CMCD v2 (response-mode) JSON
+-- 5G-MAG Reference Tools: Convert & POST CMCD (response-mode) JSON
 --==============================================================================
 --
 -- File: cmcd_response_json.lua
@@ -19,9 +18,9 @@
 
 --==============================================================================
 -- If cmcd_collector_url is configured in context.py,
--- then CMCD reporting will be enabled, with converting v1 data to v2 format and forwarding to CMCD collector;
+--     then CMCD reporting will be enabled, with converting v1 data to v2 format and forwarding to the CMCD collector;
 -- If cmcd_collector_url isn't configured in cmcd_collector_url(leave it null),
--- CMCD reporting will be disabled.(disabled by default)
+--     CMCD reporting will be disabled.(default behaviour)
 --==============================================================================
 
 local _M = {}
@@ -75,9 +74,10 @@ local function extract_v1()
     end
   end
 
-  -- 3) Parse CMCD* request headers (v1 key/value format)
+  -- 3) Parse CMCD request headers (v1 key/value format)
   local hdrs = ngx.req.get_headers()
-  for _, hk in ipairs({"cmcd", "cmcd-object", "cmcd-request", "cmcd-status", "cmcd-session"}) do
+  for _, hk in ipairs({"CMCD","CMCD-Object","CMCD-Request","CMCD-Status","CMCD-Session",
+                       "cmcd","cmcd-object","cmcd-request","cmcd-status","cmcd-session"}) do
     local hv = hdrs[hk]
     if hv then
       if type(hv)=="table" then
@@ -164,20 +164,17 @@ local function build_origin_headers_in_request()
     referer = dict:get("spoof_referer")
   end
 
-
   -- Final fallback: synthesize a valid Origin/Referer to avoid nil/empty values
-  -- (required by some collectors and log pipelines, e.g. Fluentd)
   if not origin or origin == "" then
     local scheme = ngx.var.scheme or "http"
     local host   = ngx.var.server_name or ngx.var.host or ngx.var.server_addr or "127.0.0.1"
-    local port   = (dict and dict:get("spoof_origin_port")) or "8080"  -- Todo: make it configurable next
+    local port   = (dict and dict:get("spoof_origin_port")) or "8080"
     origin = string.format("%s://%s:%s", scheme, host, port)
   end
   if not referer or referer == "" then
     referer = origin .. "/player"
   end
 
-  ngx.log(ngx.NOTICE, "[cmcd][response] using Origin=", origin, " Referer=", referer)
   return { ["Origin"] = origin, ["Referer"] = referer }
 end
 
@@ -185,7 +182,7 @@ end
 local function async_post_json(premature, url, payload, extra_headers)
   if premature then return end
   local httpc = http.new()
-  httpc:set_timeout(3000)  -- Todo: make it configurable next
+  httpc:set_timeout(3000)
   local body = cjson.encode(payload)
 
   -- Build request headers inside timer context(ngx.req / ngx.var are not available here)
@@ -203,12 +200,12 @@ local function async_post_json(premature, url, payload, extra_headers)
     keepalive = true
   })
   if not res then
-    ngx.log(ngx.ERR, "[cmcd][response] POST failed: ", err or "nil", " url=", url)
+    ngx.log(ngx.ERR, "[cmcd] POST failed: ", err or "nil", " url=", url)
     return
   end
-  ngx.log(ngx.NOTICE, "[cmcd][response] POST resp ", res.status, " len=", res.body and #res.body or 0)
+  
   if res.status >= 300 then
-    ngx.log(ngx.WARN, "[cmcd][response] non-2xx: ", res.status, " body=", res.body or "")
+    ngx.log(ngx.WARN, "[cmcd] non-2xx: ", res.status, " body=", res.body or "")
   end
 end
 
@@ -236,10 +233,10 @@ local function main()
   -- if cmcd collector url is not configured, cmcd reporting won't be enabled
   local url = get_cmcd_collector_url()
   if not url or url == "" then
-    ngx.log(ngx.NOTICE, "[cmcd][response] Collector url is not configured, CMCD reporting won't be enabled!")
+    ngx.log(ngx.NOTICE, "[cmcd]Collector url is not configured, CMCD reporting won't be enabled!")
     return
   end
-  ngx.log(ngx.NOTICE, "[cmcd][response] CMCD reporting is enabled. collector_url resolved to: ", url)
+  ngx.log(ngx.NOTICE, "[cmcd]CMCD reporting is enabled. collector_url is: ", url)
 
   local v1 = extract_v1()
   if next(v1) then
@@ -252,22 +249,22 @@ local function main()
     --       since ngx.req / ngx.var are unavailable inside timer callbacks
     local origin_headers = build_origin_headers_in_request()
 
-    ngx.log(ngx.NOTICE, "[cmcd][response] v2 payload = ", cjson.encode(resp))
+    ngx.log(ngx.NOTICE, "[cmcd]v2 payload = ", cjson.encode(resp))
   
     -- Schedule async POST with URL, payload and pre-built headers
     -- Do not access ngx.req / ngx.var inside the timer callback
     local ok, err = ngx.timer.at(0, async_post_json, url, resp, origin_headers)
     if not ok then
-      ngx.log(ngx.ERR, "[cmcd][response] failed to schedule post timer: ", err or "nil")
+      ngx.log(ngx.ERR, "[cmcd]failed to schedule post timer: ", err or "nil")
     end
   else
-    ngx.log(ngx.WARN, "[cmcd][response] no CMCD found: ", ngx.var.request_uri or "")
+    ngx.log(ngx.WARN, "[cmcd]no CMCD reporting found: ", ngx.var.request_uri or "")
   end
 end
 
 
-function _M.handle()
-  ngx.log(ngx.NOTICE, ">>> CMCD LUA (response-mode) TRIGGERED v0.4 <<<") 
+function _M.reportToDashboard()
+  ngx.log(ngx.NOTICE, ">>> CMCD LUA (response-mode) TRIGGERED <<<") 
   
   return main()
 end

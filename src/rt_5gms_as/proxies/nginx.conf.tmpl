@@ -76,8 +76,7 @@ http {{
 
   init_worker_by_lua_block {{
     package.loaded["cmcd_response_json"] = nil
-    cmcdHandle = require "cmcd_response_json"
-    ngx.log(ngx.ERR, "[cmcd] init_worker loaded type=", type(cmcdHandle))
+    cmcd_response = require "cmcd_response_json"
   }}
 
 {server_configs}

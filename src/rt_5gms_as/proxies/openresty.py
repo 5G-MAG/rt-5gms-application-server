@@ -107,12 +107,12 @@ class OpenRestyLocationConfig(object):
 {prefix}    ngx.var.downstream_prefix_url = ngx.var.downstream_prefix_url..ngx.ctx.uri:sub(2)
 {prefix}    -- ngx.log(ngx.DEBUG,"rewrite_by_lua_block: proxy=", ngx.var.downstream_prefix_url,", uri=",uri)
 
-{prefix}    -- [CMCD MERGE] Execute CMCD handler per request (safe-guarded)
+{prefix}    -- Execute CMCD handler per request 
 {prefix}    if uri:find("%.m4s$") or uri:find("%.mp4$") or uri:find("%.m4v$") or uri:find("%.m4a$") or uri:find("%.mpd$") then
-{prefix}      if cmcdHandle and cmcdHandle.handle then
-{prefix}        local ok, err = pcall(cmcdHandle.handle)
+{prefix}      if cmcd_response and cmcd_response.reportToDashboard then
+{prefix}        local ok, err = pcall(cmcd_response.reportToDashboard)
 {prefix}        if not ok then
-{prefix}          ngx.log(ngx.ERR, "[cmcd] handle() failed: ", err)
+{prefix}          ngx.log(ngx.ERR, "[cmcd] reportToDashboard() failed: ", err)
 {prefix}        end
 {prefix}      end
 {prefix}    end
