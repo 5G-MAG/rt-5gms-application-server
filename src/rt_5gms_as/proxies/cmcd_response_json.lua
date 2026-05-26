@@ -179,10 +179,10 @@ local function build_origin_headers_in_request()
 end
 
 -- ---------------- async POST (executed via ngx.timer) ----------------
-local function async_post_json(premature, url, payload, extra_headers)
+local function async_post_json(premature, url, payload, extra_headers,timeout_ms)
   if premature then return end
   local httpc = http.new()
-  httpc:set_timeout(3000)
+  httpc:set_timeout(timeout_ms)
   local body = cjson.encode(payload)
 
   -- Build request headers inside timer context(ngx.req / ngx.var are not available here)
@@ -228,9 +228,26 @@ local function get_cmcd_collector_url()
   return url
 end
 
+
+-- ---------------- get cmcd httpc timeout ----------------
+-- if cmcd timeout is not configured, cmcd timeout will use the default value of 1000
+local function get_cmcd_timeout()
+  local dict = ngx.shared.cmcd_cfg
+  local timeout_ms_str  = dict and dict:get("cmcd_timeout_ms") 
+  local timeout_ms_num = tonumber(timeout_ms_str)
+
+  if timeout_ms_num and timeout_ms_num > 0 then
+  	return timeout_ms_num
+  end
+    
+  return 1000
+end
+
 -- ---------------- main ----------------
 local function main()
-  -- if cmcd collector url is not configured, cmcd reporting won't be enabled
+
+
+  -- if cmcd collector url is not configured, cmcd reporting won't be enabled  
   local url = get_cmcd_collector_url()
   if not url or url == "" then
     ngx.log(ngx.NOTICE, "[cmcd]Collector url is not configured, CMCD reporting won't be enabled!")
@@ -253,7 +270,8 @@ local function main()
   
     -- Schedule async POST with URL, payload and pre-built headers
     -- Do not access ngx.req / ngx.var inside the timer callback
-    local ok, err = ngx.timer.at(0, async_post_json, url, resp, origin_headers)
+    local timeout_ms = get_cmcd_timeout()
+    local ok, err = ngx.timer.at(0, async_post_json, url, resp, origin_headers, timeout_ms)
     if not ok then
       ngx.log(ngx.ERR, "[cmcd]failed to schedule post timer: ", err or "nil")
     end

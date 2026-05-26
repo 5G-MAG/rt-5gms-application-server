@@ -375,6 +375,8 @@ class OpenRestyWebProxy(WebProxyInterface):
         scriptdir = os.path.dirname(os.path.abspath(__file__))
 
         cmcd_collector_url = self._context.getConfigVar('5gms_as', 'cmcd_collector_url', '')
+        cmcd_timeout_ms = self._context.getConfigVar('5gms_as', 'cmcd_timeout_ms', '')
+        cmcd_lua_dir = self._context.getConfigVar('5gms_as', 'cmcd_lua_dir', '')
 
         # Create caching directives if we have a cache dir configured
         proxy_cache_path_directive = ''
