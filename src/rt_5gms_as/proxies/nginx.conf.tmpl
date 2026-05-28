@@ -60,20 +60,21 @@ http {{
 	
     local cmcd_lua_dir = "{cmcd_lua_dir}"
     if cmcd_lua_dir ~= "" then
-        package.path = cmcd_lua_dir .. "/?.lua;" .. package.path
+      package.path = cmcd_lua_dir .. "/?.lua;" .. package.path
     end
   
     dynredir = require "dynamicredirect"
 	
     local dict = ngx.shared.cmcd_cfg
     if dict then
+
     	if "{cmcd_collector_url}" ~= "" then
-		dict:set("cmcd_collector_url", "{cmcd_collector_url}")
-	end
+        dict:set("cmcd_collector_url", "{cmcd_collector_url}")
+      end
 	  
-	if "{cmcd_timeout_ms}" ~= "" then
-		dict:set("cmcd_timeout_ms", "{cmcd_timeout_ms}")
-	end	  
+      if "{cmcd_timeout_ms}" ~= "" then
+        dict:set("cmcd_timeout_ms", "{cmcd_timeout_ms}")
+      end	  
     end
 
     math.randomseed(os.time())
