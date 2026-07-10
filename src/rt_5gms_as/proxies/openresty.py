@@ -106,6 +106,16 @@ class OpenRestyLocationConfig(object):
 {prefix}    ngx.req.set_uri(uri)
 {prefix}    ngx.var.downstream_prefix_url = ngx.var.downstream_prefix_url..ngx.ctx.uri:sub(2)
 {prefix}    -- ngx.log(ngx.DEBUG,"rewrite_by_lua_block: proxy=", ngx.var.downstream_prefix_url,", uri=",uri)
+
+{prefix}    -- Execute CMCD handler per request 
+{prefix}    if uri:find("%.m4s$") or uri:find("%.mp4$") or uri:find("%.m4v$") or uri:find("%.m4a$") or uri:find("%.mpd$") then
+{prefix}      if cmcd_response and cmcd_response.reportToDashboard then
+{prefix}        local ok, err = pcall(cmcd_response.reportToDashboard)
+{prefix}        if not ok then
+{prefix}          ngx.log(ngx.ERR, "[cmcd] reportToDashboard() failed: ", err)
+{prefix}        end
+{prefix}      end
+{prefix}    end
 {prefix}  }}
 {prefix}  proxy_pass $downstream_prefix_url;
 {prefix}  proxy_intercept_errors on;
@@ -363,10 +373,16 @@ class OpenRestyWebProxy(WebProxyInterface):
             self.log.error("Could not find the mime.types file")
             raise FileNotFoundError
         scriptdir = os.path.dirname(os.path.abspath(__file__))
+
+        cmcd_collector_url = self._context.getConfigVar('5gms_as', 'cmcd_collector_url', '')
+        cmcd_timeout_ms = self._context.getConfigVar('5gms_as', 'cmcd_timeout_ms', '')
+        cmcd_lua_dir = self._context.getConfigVar('5gms_as', 'cmcd_lua_dir', '')
+
         # Create caching directives if we have a cache dir configured
         proxy_cache_path_directive = ''
         if proxy_cache_path is not None and len(proxy_cache_path) > 0:
             proxy_cache_path_directive = 'proxy_cache_path %s levels=1:2 use_temp_path=on keys_zone=cacheone:10m;'%proxy_cache_path
+
         # Create the server configurations from the CHCs
         server_configs: Dict[Tuple[str,Optional[str]], OpenRestyServerConfig] = {}
         for provisioning_session_id in self._context.getProvisioningSessionIds():

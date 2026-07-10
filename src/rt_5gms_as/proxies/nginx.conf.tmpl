@@ -15,8 +15,8 @@
 #
 
 worker_processes 5;
-error_log	{error_log_path};
-pid		{pid_path};
+error_log    {error_log_path};
+pid        {pid_path};
 worker_rlimit_nofile 8192;
 
 {nginx_module_includes}
@@ -47,6 +47,7 @@ http {{
   scgi_temp_path {scgi_temp_path};
   lua_package_path "{scriptdir}/?.lua;;";
   lua_shared_dict dynredirmap 10m;
+  lua_shared_dict cmcd_cfg 1m;
   resolver {resolvers};
   proxy_ssl_server_name on;
 
@@ -56,7 +57,25 @@ http {{
   server_names_hash_bucket_size 128; # this seems to be required for some vhosts
 
   init_by_lua_block {{
+	
+    local cmcd_lua_dir = "{cmcd_lua_dir}"
+    if cmcd_lua_dir ~= "" then
+      package.path = cmcd_lua_dir .. "/?.lua;" .. package.path
+    end
+  
     dynredir = require "dynamicredirect"
+	
+    local dict = ngx.shared.cmcd_cfg
+    if dict then
+
+      if "{cmcd_collector_url}" ~= "" then
+        dict:set("cmcd_collector_url", "{cmcd_collector_url}")
+      end
+	  
+      if "{cmcd_timeout_ms}" ~= "" then
+        dict:set("cmcd_timeout_ms", "{cmcd_timeout_ms}")
+      end	  
+    end
 
     math.randomseed(os.time())
 
@@ -64,6 +83,11 @@ http {{
       local ret = s:gsub("([]*^[%%.()])", "%%%1")
       return ret
     end
+  }}
+
+  init_worker_by_lua_block {{
+    package.loaded["cmcd_response_json"] = nil
+    cmcd_response = require "cmcd_response_json"
   }}
 
 {server_configs}
