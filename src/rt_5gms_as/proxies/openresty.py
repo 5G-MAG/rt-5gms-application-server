@@ -42,6 +42,26 @@ from ..proxy_factory import WebProxyInterface, add_web_proxy
 from ..utils import find_executable_on_path, traverse_directory_tree
 from ..context import Context
 
+def _alias_hostname(alias: str) -> str:
+    '''Strip any ":port" suffix from a domainNameAlias for use as an nginx server_name
+
+    nginx matches the "server_name" directive against the "Host" request header with
+    the port removed, so a ":port" suffix in an alias can never be selected via
+    name-based virtual server matching. Only the hostname part is usable here; the
+    port is still significant to callers wanting the full alias (e.g. for client-facing
+    URLs), so this must only be used when deriving nginx server names/keys.
+    '''
+    if alias.startswith('['):
+        # IPv6 literal, e.g. "[::1]:8001" or "[::1]"
+        end = alias.find(']')
+        if end != -1:
+            return alias[:end+1]
+        return alias
+    host, sep, port = alias.rpartition(':')
+    if sep and port.isdigit():
+        return host
+    return alias
+
 class OpenRestyLocationConfig(object):
     '''
     Class to hold and compare location configurations
@@ -406,9 +426,10 @@ class OpenRestyWebProxy(WebProxyInterface):
                 if sk not in server_configs:
                     server_configs[sk] = OpenRestyServerConfig(self._context, {dc.canonical_domain_name}, proxy_cache_path is not None, certificate_filename)
                 if dc.domain_name_alias is not None:
-                    dsk = (dc.domain_name_alias, certificate_filename is not None)
+                    alias_hostname = _alias_hostname(dc.domain_name_alias)
+                    dsk = (alias_hostname, certificate_filename is not None)
                     if dsk not in server_configs:
-                        server_configs[dsk] = OpenRestyServerConfig(self._context, {dc.domain_name_alias}, proxy_cache_path is not None, certificate_filename)
+                        server_configs[dsk] = OpenRestyServerConfig(self._context, {alias_hostname}, proxy_cache_path is not None, certificate_filename)
                 base_url = urlparse(str(dc.base_url))
                 m4d_path_prefix = base_url.path
                 if m4d_path_prefix[0] != '/':
