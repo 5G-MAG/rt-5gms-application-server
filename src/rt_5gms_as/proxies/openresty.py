@@ -235,6 +235,7 @@ class OpenRestyServerConfig(object):
         if self.certificate_file is not None:
             ret += f'''{prefix}  ssl_certificate {self.certificate_file};
 {prefix}  ssl_certificate_key {self.certificate_file};
+{prefix}  http2 on;
 
 '''
         if self.use_cache:
