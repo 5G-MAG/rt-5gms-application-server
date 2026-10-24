@@ -33,7 +33,7 @@ import os.path
 import sys
 from typing import Optional
 
-from .openapi_5g.models.content_hosting_configuration import ContentHostingConfiguration
+from .openapi_5g.models.application_server_content_hosting_configuration import ApplicationServerContentHostingConfiguration as ContentHostingConfiguration
 
 def wrapped_default(self, obj):
     return getattr(obj.__class__, "__jsontype__", getattr(obj.__class__, "__str__", wrapped_default.default))(obj)
@@ -100,6 +100,10 @@ class Context(object):
         # Initialise some member variables
         self.__provisioning_sessions = {}
         self.__certificates = {}
+        # identifiers of resources that were destroyed (TS 26.512 clauses 4.5.2.3 and 4.5.4.3: a destroyed identifier
+        # cannot be created again, and is answered with 410)
+        self.__destroyed_content_hosting_configurations = set()
+        self.__destroyed_certificates = set()
         # Load the configurations
         self.__loadConfiguration(force=True)
         self.__loadCachedCertificates(force=True)
@@ -188,6 +192,18 @@ class Context(object):
         Check for the presence of a ContentHostingConfiguration
         '''
         return provisioning_session_id in self.__provisioning_sessions
+
+    def wasContentHostingConfigurationDestroyed(self, resource_id: str):
+        '''
+        Check if a ContentHostingConfiguration existed and was destroyed
+        '''
+        return resource_id in self.__destroyed_content_hosting_configurations
+
+    def wasCertificateDestroyed(self, certificate_id: str):
+        '''
+        Check if a certificate existed and was destroyed
+        '''
+        return certificate_id in self.__destroyed_certificates
 
     def findContentHostingConfigurationByProvisioningSession(self, provisioning_session_id: str):
         '''
@@ -357,8 +373,14 @@ class Context(object):
             raise Context.ValueError('ContentHostingConfiguration must have an ingestConfiguration', 'ingestConfiguration')
         if chc.distribution_configurations is None or not hasattr(chc.distribution_configurations, '__iter__'):
             raise Context.ValueError('ContentHostingConfiguration must have a distributionConfigurations array', 'distributionConfigurations')
-        # Validate the certificate IDs
+        # What the web proxy can realise: pull ingest over HTTP (TS 26.512 table in clause 6.x lists both URNs, the second one is deprecated)
+        if chc.ingest_configuration.mode != 'PULL' or chc.ingest_configuration.protocol not in ('urn:3gpp:5gms:content-protocol:http-pull', 'urn:3gpp:5gms:content-protocol:http-pull-ingest'):
+            raise Context.ConfigError('This 5GMS AS can only ingest content by HTTP pull (mode PULL, protocol urn:3gpp:5gms:content-protocol:http-pull)')
+        # TS 26.512 clause 4.5.4.3: an invalid reference to another resource fails the operation with 400
         for distrib in chc.distribution_configurations:
+            if distrib.content_preparation_template_id is not None:
+                # this AS holds no Content Preparation Templates, so every reference is invalid
+                raise Context.ValueError('Content Preparation Template %s not found'%(distrib.content_preparation_template_id), 'distributionConfigurations.contentPreparationTemplateId')
             if distrib.certificate_id is not None and not self.haveCertificate(distrib.certificate_id):
                 raise Context.ValueError('Certificate ID %s in ContentHostingConfiguration for provisioning session Id %s not found in certificates map'%(distrib.certificate_id, provisioning_session_id), 'distributionConfigurations.certificateId')
         # Update configuration
@@ -383,6 +405,7 @@ class Context(object):
         # Since the CHC is the only thing we store here, just delete the whole
         # entry.
         del self.__provisioning_sessions[provisioning_session_id]
+        self.__destroyed_content_hosting_configurations.add(provisioning_session_id)
         return True
 
     def __loadConfiguration(self, force=False):
@@ -458,6 +481,7 @@ class Context(object):
             raise Context.ConfigError("Certificate still in use by a ContentHostingConfiguration, refusing to delete")
         del self.__certificates[certificate_id]
         os.remove(os.path.join(self.certificatesCacheDir(),certificate_id))
+        self.__destroyed_certificates.add(certificate_id)
         return True
 
     def __loadCachedCertificates(self, force: bool = False):
@@ -475,9 +499,9 @@ class Context(object):
         for provisioning_session_id,provisioning_session in self.__provisioning_sessions.items():
             if 'chc' in provisioning_session:
                 chc = provisioning_session['chc']
-                for dc in chc['distribution_configurations']:
-                    if 'certificate_id' in dc and not self.haveCertificate(dc['certificate_id']):
-                        raise Context.ConfigError("Certificate %s not present"%(dc['certificate_id']))
+                for dc in chc.distribution_configurations:
+                    if dc.certificate_id is not None and not self.haveCertificate(dc.certificate_id):
+                        raise Context.ConfigError("Certificate %s not present"%(dc.certificate_id))
         return True
 
     def __certificateInUse(self, certificate_id: str):

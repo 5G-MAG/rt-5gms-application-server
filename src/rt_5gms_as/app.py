@@ -32,7 +32,9 @@ import argparse
 import asyncio
 import hypercorn
 import hypercorn.asyncio
-import pkg_resources
+from fastapi.exceptions import RequestValidationError
+from starlette.exceptions import HTTPException as StarletteHTTPException
+import importlib.metadata
 import signal
 import sys
 
@@ -46,13 +48,10 @@ from .utils import async_create_task
 from .exceptions import ProblemException, NoProblemException
 from .openapi_5g.apis.default_api import router as m3_router
 
-__pkg = None
 __pkg_version = 'Devel'
 try:
-    __pkg = pkg_resources.get_distribution('rt-5gms-application-server')
-    if __pkg is not None:
-        __pkg_version = __pkg.version
-except:
+    __pkg_version = importlib.metadata.version('rt-5gms-application-server')
+except importlib.metadata.PackageNotFoundError:
     pass
 
 _app_server_hdr = '5GMSd-AS/'+__pkg_version
@@ -174,10 +173,39 @@ async def __app(context):
         hdrs['server'] = _app_server_hdr
         return Response(exc.body, status_code=exc.status_code, headers=hdrs, media_type=exc.media_type)
 
+    @m3_app.exception_handler(RequestValidationError)
+    async def request_validation_exception_handler(request, exc):
+        path = request.url.path
+        # a resource this AS does not implement is answered 501 whatever the body is
+        if request.method in ('POST', 'PUT') and ('/content-preparation-templates/' in path or '/content-publishing-configurations/' in path):
+            return AppJSONResponse(status_code=501, content=ProblemException(status_code=501, title='Not Implemented', detail='This resource is not implemented by this 5GMS AS', instance=path).object, media_type='application/problem+json')
+        # TS 29.500 clause 5.2.7.2: unsupported content format is rejected with 415
+        expected = None
+        if path.split('/')[-2:-1] == ['certificates']:
+            expected = 'application/x-pem-file'
+        elif path.endswith('/purge'):
+            expected = 'application/x-www-form-urlencoded'
+        elif '/content-hosting-configurations/' in path:
+            expected = 'application/json'
+        got = request.headers.get('content-type', '').split(';')[0].strip()
+        if expected is not None and got != expected:
+            return AppJSONResponse(status_code=415, content=ProblemException(status_code=415, title='Invalid media type', detail='The request body has to be of type '+expected, instance=path).object, media_type='application/problem+json')
+        # TS 29.500 clause 5.2.7.2: a request that does not comply with the schema is rejected with 400 (INVALID_MSG_FORMAT)
+        problem = ProblemException(status_code=400, title='Bad Request', detail='The request does not comply with the schema', instance=request.url.path,
+                                   invalid_params=[{'param': '.'.join(str(p) for p in err.get('loc', [])), 'reason': str(err.get('msg', ''))} for err in exc.errors()])
+        problem.object['cause'] = 'INVALID_MSG_FORMAT'
+        return AppJSONResponse(status_code=400, content=problem.object, media_type='application/problem+json')
+
+    @m3_app.exception_handler(StarletteHTTPException)
+    async def http_exception_handler(request, exc):
+        # errors raised by the framework itself (unknown resource 404, method not allowed 405) are also ProblemDetails (clause 7.1.7 of TS 26.510)
+        problem = ProblemException(status_code=exc.status_code, title=str(exc.detail), instance=request.url.path)
+        return AppJSONResponse(status_code=exc.status_code, content=problem.object, headers=getattr(exc, 'headers', None), media_type='application/problem+json')
+
     # TODO: Create HTTP server to handle M2 interface and add task to main loop
 
     # Create HTTP server to handle M3 interface and add task to main loop
-    m3_app.include_router(m3_router, prefix="/3gpp-m3/v1")
+    m3_app.include_router(m3_router, prefix="/3gpp-mas-configuration/v1")
 
     m3_config = hypercorn.Config.from_mapping(include_server_header=False, bind=context.getConfigVar('5gms_as','m3_listen')+':'+context.getConfigVar('5gms_as','m3_port'), loglevel='DEBUG', accesslog='-', errorlog='-')
     m3_serve_task = async_create_task(hypercorn.asyncio.serve(m3_app, m3_config), name='M3-server')

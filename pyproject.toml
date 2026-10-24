@@ -18,7 +18,7 @@ dependencies = [
     'h2 >= 4.1.0',
     'aiofiles >= 0.7.0'
 ]
-requires-python = ">=3.7"
+requires-python = ">=3.8"
 scripts = { 5gms-application-server = "rt_5gms_as.app:main" }
 authors = [
     { name = 'David Waring', email = 'david.waring2@bbc.co.uk' }

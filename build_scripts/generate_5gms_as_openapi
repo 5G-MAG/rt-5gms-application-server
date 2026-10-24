@@ -26,8 +26,9 @@ common_scripts_dir=`cd "${scriptdir}/../external/rt-common-shared/open5gs-tools/
 fiveg_apis_overrides=`cd "$common_scripts_dir/../5G_APIs-overrides"; pwd`':'`cd "${scriptdir}/../external/rt-common-shared/5gms/5G_APIs-overrides"; pwd`
 
 # Command line defaults
-default_api='TS26512_M1_ContentHostingProvisioning M3_merged'
-default_branch='REL-17'
+# the M3 API of TS 26.512 V19.3.0 (clause C.3A.0 names the Forge tag with the YAML files of this release)
+default_api='TS26512_Mas_Configuration'
+default_branch='TSG112-Rel19'
 
 if [ ! -e "${scriptdir}/openapi-generator-config.yaml" -o "${scriptdir}/openapi-generator-config.yaml" -ot "${scriptdir}/openapi-generator-config.yaml.in" ]; then
     re_subst_safe_scriptdir=`echo "$scriptdir" | sed -E 's@([&\\/])@\\\\\\1@g;'`
@@ -111,7 +112,7 @@ if [ ! -d "${rt_5gms_as_dir}/openapi_5g" ]; then
     mkdir -p "${rt_5gms_as_dir}/openapi_5g"
     tmpdir=`mktemp -d --tmpdir openapi-5gms-as-generator.XXXXXXXX`
     trap "rm -rf '$tmpdir'" 0 1 2 3 4 5 6 7 8 10 11 12 13 14
-    if ! "$common_scripts_dir/generate_openapi" -a "$API" -b "$BRANCH" -l python-fastapi:packageName=rt_5gms_as.openapi_5g,projectName=openapi-5g,title=openapi5g -d "$tmpdir" -o "${fiveg_apis_overrides}:${scriptdir}" -c "${scriptdir}/openapi-generator-config.yaml"; then
+    if ! "$common_scripts_dir/generate_openapi" -a "$API" -b "$BRANCH" -l python-fastapi:packageName=rt_5gms_as.openapi_5g,projectName=openapi-5g,title=openapi5g -d "$tmpdir" -o "${fiveg_apis_overrides}:${scriptdir}" -c "${scriptdir}/openapi-generator-config.yaml" -y "${scriptdir}/fix_openapi_yaml.py"; then
 	echo "Error: openapi-generator failed, aborting!" >&2
 	rm -rf "${rt_5gms_as_dir}/openapi_5g"
 	exit 1

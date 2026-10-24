@@ -12,7 +12,7 @@
 # program. If this file is missing then the license can be retrieved from
 # https://drive.google.com/file/d/1cinCiA778IErENZ3JN52VFW-1ffHpx7Z/view
 #
-# This provides the server functions
+# This provides the server functions for the M3 API (Mas_Configuration, TS 26.512 clause 9)
 
 from fastapi import Request
 from .exceptions import ProblemException, NoProblemException
@@ -26,7 +26,8 @@ class M3Server:
     '''
     M3 API handling methods
 
-    This class contains methods that will be called by the OpenAPI generated code.
+    This class contains methods that will be called by the OpenAPI generated code. The method names are the
+    operationIds of the Mas_Configuration API (TS 26.512 V19.3.0 clause 9 and C.3A).
 
     This file needs to be kept synchronised with changes to the M3 API.
     '''
@@ -44,118 +45,138 @@ class M3Server:
         '''
         self.__context = context
 
-    async def create_content_hosting_configuration(self, provisioningSessionId, content_hosting_configuration, request=None):
-        '''M3 Handler for "POST /3gpp-m3/v1/content-hosting-configurations/{provisioningSessionId}"
-
-        Content-Type: application/json
-        Expects a ContentHostingConfiguration JSON object as the body.
-
-        Responds with empty body and 201 to indicate successful creation
-        '''
+    #### helpers ####
+    def __ready(self, request):
         if self.__context is None:
             raise ProblemException(status_code=500, title='Server not finished initialisation', instance=request.url.path)
+        return self.__context
+
+    @staticmethod
+    def __not_implemented(request, what):
+        # TS 29.500 clause 5.2.7.2: a request that the NF does not implement is answered with an error status and a ProblemDetails
+        raise ProblemException(status_code=501, title='Not Implemented', detail='%s is not implemented by this 5GMS AS'%what, instance=request.url.path)
+
+    @staticmethod
+    def __gone_or_missing(request, destroyed, what):
+        # TS 26.512 clause 4.5.4.5 and others: 410 if the resource previously existed and was destroyed, otherwise 404
+        if destroyed:
+            raise ProblemException(status_code=410, title='%s Gone'%what, instance=request.url.path)
+        raise ProblemException(status_code=404, title='%s Not Found'%what, instance=request.url.path)
+
+    #### Content Hosting Configurations (TS 26.512 clause 4.5.4) ####
+    async def enumerate_content_hosting_configurations(self, request=None):
+        '''M3 Handler for "GET .../content-hosting-configurations"
+
+        Responds with a JSON array of Content Hosting Configuration resource identifiers (clause 4.5.4.2).
+        '''
+        ctx = self.__ready(request)
+        ctx.appLog().info("Getting list of content hosting configurations...")
+        return list(ctx.getProvisioningSessionIds())
+
+    async def create_content_hosting_configuration(self, afResourceId, content_hosting_configuration, request=None):
+        '''M3 Handler for "POST .../content-hosting-configurations/{afResourceId}" (clause 4.5.4.3)
+
+        Content-Type: application/json
+        Expects an ApplicationServerContentHostingConfiguration JSON object as the body.
+
+        Responds with an empty body and 201, 409 if it exists, 400 if a referenced resource is invalid, 410 if it was
+        destroyed before.
+        '''
+        ctx = self.__ready(request)
         if request.headers['content-type'] != 'application/json':
             raise ProblemException(status_code=415, title='Invalid media type', instance=request.url.path)
-        # Error 405 if the ContentHostingConfiguration already exists for the provisioning session
-        if self.__context.haveContentHostingConfiguration(provisioningSessionId):
-            raise ProblemException(status_code=405, title='ContentHostingConfiguration Already Exists', instance=request.url.path)
-        # Add the configuration to the current context
-        self.__context.appLog().info("Adding content hosting configuration %s..."%(provisioningSessionId))
-        self.__context.appLog().debug("provisioning_session_id = %s, chc = %r", provisioningSessionId, content_hosting_configuration)
+        if ctx.haveContentHostingConfiguration(afResourceId):
+            raise ProblemException(status_code=409, title='Content Hosting Configuration Already Exists', instance=request.url.path)
+        if ctx.wasContentHostingConfigurationDestroyed(afResourceId):
+            raise ProblemException(status_code=410, title='Content Hosting Configuration Gone', instance=request.url.path)
+        ctx.appLog().info("Adding content hosting configuration %s..."%(afResourceId))
+        ctx.appLog().debug("afResourceId = %s, chc = %r", afResourceId, content_hosting_configuration)
         try:
-            self.__context.addContentHostingConfiguration(provisioningSessionId, content_hosting_configuration)
+            ctx.addContentHostingConfiguration(afResourceId, content_hosting_configuration)
+        except Context.ValueError as err:
+            # a referenced resource is invalid: the resource stays uncreated
+            raise ProblemException(status_code=400, title='Invalid Content Hosting Configuration', detail=str(err), instance=request.url.path, invalid_params=[{'param': err.args[1], 'reason': err.args[0]}])
         except Context.ConfigError as err:
-            # There was a problem with the ContentHostingConfiguration which wasn't picked up by the OpenAPI syntax checks
-            raise ProblemException(status_code=415, title='Error in ContentHostingConfiguration', detail=str(err), instance=request.url.path)
-        wp = self.__context.webProxy()
+            raise ProblemException(status_code=500, title='Error in Content Hosting Configuration', detail=str(err), instance=request.url.path)
+        wp = ctx.webProxy()
         # Start or reload the web proxy server
         if not wp.daemonRunning():
-            self.__context.appLog().info("Starting proxy daemon...")
+            ctx.appLog().info("Starting proxy daemon...")
             await wp.writeConfiguration()
             await wp.startDaemon()
         else:
-            self.__context.appLog().info("Reloading proxy daemon...")
+            ctx.appLog().info("Reloading proxy daemon...")
             await wp.reload()
-        # Do a "201 Created" response on success
         raise NoProblemException(status_code=201, media_type='application/json', headers={'Location': request.url.path})
 
-    async def create_server_certificate(self, afUniqueCertificateId, body, request=None):
-        '''M3 Handler for "POST /3gpp-m3/v1/certificates/{afUniqueCertificateId}"
+    async def replace_content_hosting_configuration(self, afResourceId, content_hosting_configuration, request=None):
+        '''M3 Handler for "PUT .../content-hosting-configurations/{afResourceId}" (clause 4.5.4.5)
 
-        Content-Type: application/x-pem-file
-        Body contains PEM file contents (public certificate, private key and intermediate certificates)
-
-        Responds with 201 if the certificate was created successfully
+        Responds with 200 and an empty body, 204 if unchanged, 400 if a referenced resource is invalid (state kept),
+        410 if destroyed before, 404 if it never existed.
         '''
-        if self.__context is None:
-            raise ProblemException(status_code=500, title='Server not finished initialisation', instance=request.url.path)
-        if request.headers['content-type'] != 'application/x-pem-file':
-            raise ProblemException(status_code=415, title='Invalid media type', instance=request.url.path)
-        # Error 405 if we already have this certificate
-        if self.__context.haveCertificate(afUniqueCertificateId):
-            raise ProblemException(status_code=405, title='Certificate Already Exists', instance=request.url.path)
-        # New certificate so add it
-        self.__context.appLog().info("Adding certificate %s..."%(afUniqueCertificateId))
-        self.__context.addCertificate(afUniqueCertificateId, body)
-        # Do a "201 Created" response on success
-        raise NoProblemException(status_code=201, media_type='application/json', headers={'Location': request.url.path})
-
-    async def destroy_content_hosting_configuration(self, provisioningSessionId, request=None):
-        '''M3 Handler for "DELETE /3gpp-m3/v1/content-hosting-configurations/{provisioningSessionId}"
-
-        No request body
-
-        Empty 204 response on success
-        '''
-        if self.__context is None:
-            raise ProblemException(status_code=500, title='Server not finished initialisation', instance=request.url.path)
-        # Error 404 if the ContentHostingConfiguration doesn't exist
-        if not self.__context.haveContentHostingConfiguration(provisioningSessionId):
-            raise ProblemException(status_code=404, title='ContentHostingConfiguration Not Found', instance=request.url.path)
-        # Delete the ContentHostingConfiguration
-        self.__context.appLog().info("Deleting content hosting configuration %s..."%(provisioningSessionId))
-        wp = self.__context.webProxy()
-        self.__context.deleteContentHostingConfiguration(provisioningSessionId)
-        await wp.purgeAll(provisioningSessionId)
-        await wp.reload()
-        # Do a "204 No Content" to indicate successful deletion
-        raise NoProblemException(status_code=204, media_type='application/json', headers={'Location': request.url.path})
-
-    async def destroy_server_certificate(self, afUniqueCertificateId, request=None):
-        '''M3 Handler for "DELETE /3gpp-m3/v1/certificates/{afUniqueCertificateId}"
-
-        No request body.
-        '''
-        if self.__context is None:
-            raise ProblemException(status_code=500, title='Server not finished initialisation', instance=request.url.path)
-        if not self.__context.haveCertificate(afUniqueCertificateId):
-            raise ProblemException(status_code=404, title='Certificate Not Found', instance=request.url.path)
-        self.__context.appLog().info("Deleting certificate %s..."%afUniqueCertificateId)
+        ctx = self.__ready(request)
+        old_chc = ctx.findContentHostingConfigurationByProvisioningSession(afResourceId)
+        if old_chc is None:
+            self.__gone_or_missing(request, ctx.wasContentHostingConfigurationDestroyed(afResourceId), 'Content Hosting Configuration')
+        if old_chc == content_hosting_configuration:
+            raise NoProblemException(status_code=204, media_type='application/json')
+        ctx.appLog().info("Updating content hosting configuration %s..."%(afResourceId))
         try:
-            self.__context.deleteCertificate(afUniqueCertificateId)
+            if ctx.updateContentHostingConfiguration(afResourceId, content_hosting_configuration) is not True:
+                ctx.appLog().error("Assertion: content hosting configuration updated failed!")
+                raise ProblemException(status_code=500, title='Internal Server Error', detail='Assertion Error: ContentHostingConfiguration not updated when an update expected', instance=request.url.path)
+        except Context.ValueError as err:
+            raise ProblemException(status_code=400, title='Invalid Content Hosting Configuration', detail=str(err), instance=request.url.path, invalid_params=[{'param': err.args[1], 'reason': err.args[0]}])
         except Context.ConfigError as err:
-            # Only complains if certificate is still in use
-            raise ProblemException(status_code=409, title='Certificate still in use', detail=str(err), instance=request['path'])
-        # Do a "204 No Content" to indicate successful deletion
-        raise NoProblemException(status_code=204, media_type='application/json', headers={'Location': request.url.path})
+            raise ProblemException(status_code=500, title='Error in Content Hosting Configuration', detail=str(err), instance=request.url.path)
+        await ctx.webProxy().reload()
+        raise NoProblemException(status_code=200, media_type='application/json')
 
-    async def purge_content_hosting_cache(self, provisioningSessionId, pattern, request=None):
-        '''M3 Handler for "POST /3gpp-m3/v1/content-hosting-configurations/{provisioningSessionId}/purge"
+    async def destroy_content_hosting_configuration(self, afResourceId, request=None):
+        '''M3 Handler for "DELETE .../content-hosting-configurations/{afResourceId}" (clause 4.5.4.6)
 
-        Body contains x-www-form-urlencoded with one entry:
-        pattern=<regex>
+        Responds with 204; 410 if destroyed before, 404 if it never existed.
         '''
-        if self.__context is None:
-            raise ProblemException(status_code=500, title='Server not finished initialisation', instance=request.url.path)
+        ctx = self.__ready(request)
+        if not ctx.haveContentHostingConfiguration(afResourceId):
+            self.__gone_or_missing(request, ctx.wasContentHostingConfigurationDestroyed(afResourceId), 'Content Hosting Configuration')
+        ctx.appLog().info("Deleting content hosting configuration %s..."%(afResourceId))
+        wp = ctx.webProxy()
+        ctx.deleteContentHostingConfiguration(afResourceId)
+        await wp.purgeAll(afResourceId)
+        await wp.reload()
+        raise NoProblemException(status_code=204, media_type='application/json')
+
+    async def interrogate_content_hosting_configuration_state(self, afResourceId, request=None):
+        '''GET .../content-hosting-configurations/{afResourceId}/active (clause 4.5.4.8)'''
+        self.__ready(request)
+        self.__not_implemented(request, 'Interrogating the state of a Content Hosting Configuration')
+
+    async def modify_content_hosting_configuration_state(self, afResourceId, body, request=None):
+        '''POST .../content-hosting-configurations/{afResourceId}/active (clause 4.5.4.7)'''
+        self.__ready(request)
+        self.__not_implemented(request, '(De)activating a Content Hosting Configuration')
+
+    async def purge_content_hosting_cache(self, afResourceId, pattern, value=None, request=None):
+        '''M3 Handler for "POST .../content-hosting-configurations/{afResourceId}/purge" (clause 4.5.4.9)
+
+        Body: application/x-www-form-urlencoded with one key-value pair, pattern=<regular expression>.
+
+        Responds with 200 and the number of cache entries purged, 204 if none, 400 if the body or the expression is
+        malformed, 410 if the configuration was destroyed, 404 if it never existed.
+        '''
+        ctx = self.__ready(request)
         if request.headers['content-type'] != 'application/x-www-form-urlencoded':
             raise ProblemException(status_code=415, title='Invalid media type', instance=request.url.path)
+        if not ctx.haveContentHostingConfiguration(afResourceId):
+            self.__gone_or_missing(request, ctx.wasContentHostingConfigurationDestroyed(afResourceId), 'Content Hosting Configuration')
+        if pattern is None or len(pattern) == 0:
+            raise ProblemException(status_code=400, title='Bad Request', detail='The request body has to carry the key pattern with a regular expression', instance=request.url.path, invalid_params=[{'param': 'pattern', 'reason': 'missing'}])
         try:
-            if pattern is None:
-                result = await self.__context.webProxy().purgeAll(provisioningSessionId)
-            else:
-                result = await self.__context.webProxy().purgeUsingRegex(provisioningSessionId, pattern)
+            result = await ctx.webProxy().purgeUsingRegex(afResourceId, pattern)
         except regex.error as err:
-            raise ProblemException(title='Unprocessable Entity', status_code=400, instance=request.url.path, detail='Bad regex: '+str(err), invalid_params=[{'param': 'pattern', 'reason': str(err)}])
+            raise ProblemException(title='Bad Request', status_code=400, instance=request.url.path, detail='Bad regex: '+str(err), invalid_params=[{'param': 'pattern', 'reason': str(err)}])
         except WebProxyError as err:
             raise ProblemException(title='Internal Error', status_code=500, instance=request.url.path, detail='Regex failed to compile: '+str(err))
         except Exception as err:
@@ -164,75 +185,109 @@ class M3Server:
             raise NoProblemException(status_code=204)
         return result
 
-    async def retrieve_content_hosting_configurations(self, request=None):
-        '''M3 Handler for "POST /3gpp-m3/v1/content-hosting-configurations"
+    #### Server Certificates (TS 26.512 clause 4.5.2) ####
+    async def enumerate_server_certificates(self, request=None):
+        '''M3 Handler for "GET .../certificates": a JSON array of Server Certificate resource identifiers (clause 4.5.2.2)'''
+        ctx = self.__ready(request)
+        ctx.appLog().info("Getting list of certificates...")
+        return list(ctx.getCertificateIds())
 
-        No request body.
-
-        Responds with a JSON Array of ContentHostingConfiguration resource locations.
-        '''
-        if self.__context is None:
-            raise ProblemException(status_code=500, title='Server not finished initialisation', instance=request['path'])
-        # Return an array of ["/3gpp-m3/v1/content-hosting-configurations/{provisioningSessionId}", ...]
-        self.__context.appLog().info("Getting list of content hosting configurations...")
-        return [request.url.path+'/'+psi for psi in self.__context.getProvisioningSessionIds()]
-
-    async def retrieve_server_certificates(self, request=None):
-        '''M3 Handler for "POST /3gpp-m3/v1/certificates"
-
-        No request body.
-
-        Responds with a JSON Array of Certificate resource locations.
-        '''
-        if self.__context is None:
-            raise ProblemException(status_code=500, title='Server not finished initialisation', instance=request['path'])
-        # Return an array of ["/3gpp-m3/v1/certificates/{provisioningSessionId}:{certificateId}", ...]
-        self.__context.appLog().info("Getting list of certificates...")
-        return [request.url.path+'/'+ci for ci in self.__context.getCertificateIds()]
-
-    async def update_content_hosting_configuration(self, provisioningSessionId, content_hosting_configuration, request=None):
-        '''M3 Handler for "PUT /3gpp-m3/v1/content-hosting-configurations/{provisioningSessionId}"
-
-        Content-Type: application/json
-        Expects a ContentHostingConfiguration JSON object as the body.
-
-        Responds with empty body and 200 to indicate successful update or a 204 if the ContentHostingConfiguration has not changed.
-        '''
-        if self.__context is None:
-            raise ProblemException(status_code=500, title='Server not finished initialisation', instance=request['path'])
-        old_chc = self.__context.findContentHostingConfigurationByProvisioningSession(provisioningSessionId)
-        if old_chc is None:
-            raise ProblemException(status_code=404, title='ContentHostingConfiguration Not Found', instance=request.url.path)
-        if old_chc == content_hosting_configuration:
-            raise ProblemException(status_code=204, title='ContentHostingConfiguration Unchanged', instance=request.url.path)
-        self.__context.appLog().info("Updating content hosting configuration %s..."%(provisioningSessionId))
-        try:
-            if self.__context.updateContentHostingConfiguration(provisioningSessionId, content_hosting_configuration) is not True:
-                self.__context.appLog().error("Assertion: content hosting configuration updated failed!")
-                raise ProblemException(status_code=500, title='Internal Server Error', detail='Assertion Error: ContentHostingConfiguration not updated when an update expected', instance=request.url.path)
-        except Context.ConfigError as err:
-            raise ProblemException(status_code=415, title='Error in ContentHostingConfiguration', detail=str(err), instance=request.url.path)
-        await self.__context.webProxy().reload()
-
-    async def update_server_certificate(self, afUniqueCertificateId, body, request=None):
-        '''M3 Handler for "PUT /3gpp-m3/v1/certificates/{afUniqueCertificateId}"
+    async def create_server_certificate(self, afResourceId, body, request=None):
+        '''M3 Handler for "POST .../certificates/{afResourceId}" (clause 4.5.2.3)
 
         Content-Type: application/x-pem-file
-        Body contains PEM file contents (public certificate, private key and intermediate certificates).
+        Body contains PEM file contents (public certificate, private key and intermediate certificates)
 
-        Responds with empty body and 200 to indicate successful update or a 204 if the certificate file contents have not changed.
+        Responds with 201 and an empty body, 409 if it exists, 410 if destroyed before.
         '''
-        if self.__context is None:
-            raise ProblemException(status_code=500, title='Server not finished initialisation', instance=request['path'])
-        # Check if the certificate is available for update
-        if not self.__context.haveCertificate(afUniqueCertificateId):
-            raise ProblemException(status_code=404, title='Server Certificate Not Found', instance=request['path'])
-        # Update the certificate
-        self.__context.appLog().info("Attempting to update certificate %s..."%(afUniqueCertificateId))
-        if not self.__context.updateCertificate(afUniqueCertificateId, body):
+        ctx = self.__ready(request)
+        if request.headers['content-type'] != 'application/x-pem-file':
+            raise ProblemException(status_code=415, title='Invalid media type', instance=request.url.path)
+        if ctx.haveCertificate(afResourceId):
+            raise ProblemException(status_code=409, title='Certificate Already Exists', instance=request.url.path)
+        if ctx.wasCertificateDestroyed(afResourceId):
+            raise ProblemException(status_code=410, title='Certificate Gone', instance=request.url.path)
+        ctx.appLog().info("Adding certificate %s..."%(afResourceId))
+        ctx.addCertificate(afResourceId, body)
+        raise NoProblemException(status_code=201, media_type='application/json', headers={'Location': request.url.path})
+
+    async def replace_server_certificate(self, afResourceId, body, request=None):
+        '''M3 Handler for "PUT .../certificates/{afResourceId}" (clause 4.5.2.5)
+
+        Responds with 200 and an empty body, 204 if the PEM bundle is identical, 410 if destroyed before, 404 if it never existed.
+        '''
+        ctx = self.__ready(request)
+        if not ctx.haveCertificate(afResourceId):
+            self.__gone_or_missing(request, ctx.wasCertificateDestroyed(afResourceId), 'Server Certificate')
+        ctx.appLog().info("Attempting to update certificate %s..."%(afResourceId))
+        if not ctx.updateCertificate(afResourceId, body):
             raise NoProblemException(status_code=204, media_type='application/json')
         # Certificate changed, reload proxy server to pick up new cert
-        await self.__context.webProxy().reload()
-        return
+        await ctx.webProxy().reload()
+        raise NoProblemException(status_code=200, media_type='application/json')
+
+    async def destroy_server_certificate(self, afResourceId, request=None):
+        '''M3 Handler for "DELETE .../certificates/{afResourceId}" (clause 4.5.2.6)
+
+        Responds with 204; 409 if still referenced; 410 if destroyed before, 404 if it never existed.
+        '''
+        ctx = self.__ready(request)
+        if not ctx.haveCertificate(afResourceId):
+            self.__gone_or_missing(request, ctx.wasCertificateDestroyed(afResourceId), 'Server Certificate')
+        ctx.appLog().info("Deleting certificate %s..."%afResourceId)
+        try:
+            ctx.deleteCertificate(afResourceId)
+        except Context.ConfigError as err:
+            # Only complains if certificate is still in use
+            raise ProblemException(status_code=409, title='Certificate still in use', detail=str(err), instance=request.url.path)
+        raise NoProblemException(status_code=204, media_type='application/json')
+
+    #### Content Preparation Templates (clause 4.5.3): not implemented ####
+    async def enumerate_content_preparation_templates(self, request=None):
+        '''GET .../content-preparation-templates: this AS holds none (clause 4.5.3.2: an empty array)'''
+        self.__ready(request)
+        return []
+
+    async def create_content_preparation_template(self, afResourceId, body, request=None):
+        self.__ready(request)
+        self.__not_implemented(request, 'Content Preparation Templates')
+
+    async def replace_content_preparation_template(self, afResourceId, body, request=None):
+        self.__ready(request)
+        self.__not_implemented(request, 'Content Preparation Templates')
+
+    async def destroy_content_preparation_template(self, afResourceId, request=None):
+        self.__ready(request)
+        self.__not_implemented(request, 'Content Preparation Templates')
+
+    #### Content Publishing Configurations (clause 4.5.5, uplink): not implemented ####
+    async def enumerate_content_publishing_configurations(self, request=None):
+        '''GET .../content-publishing-configurations: this AS holds none (clause 4.5.5.2: an empty array)'''
+        self.__ready(request)
+        return []
+
+    async def create_content_publishing_configuration(self, afResourceId, content_publishing_configuration, request=None):
+        self.__ready(request)
+        self.__not_implemented(request, 'Content Publishing')
+
+    async def replace_content_publishing_configuration(self, afResourceId, content_publishing_configuration, request=None):
+        self.__ready(request)
+        self.__not_implemented(request, 'Content Publishing')
+
+    async def destroy_content_publishing_configuration(self, afResourceId, request=None):
+        self.__ready(request)
+        self.__not_implemented(request, 'Content Publishing')
+
+    async def interrogate_content_publishing_configuration_state(self, afResourceId, request=None):
+        self.__ready(request)
+        self.__not_implemented(request, 'Content Publishing')
+
+    async def modify_content_publishing_configuration_state(self, afResourceId, body, request=None):
+        self.__ready(request)
+        self.__not_implemented(request, 'Content Publishing')
+
+    async def purge_content_publishing_cache(self, afResourceId, pattern, value=None, request=None):
+        self.__ready(request)
+        self.__not_implemented(request, 'Content Publishing')
 
 server = M3Server()

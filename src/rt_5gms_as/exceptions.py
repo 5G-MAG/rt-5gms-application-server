@@ -35,7 +35,7 @@ class ProblemException(Exception):
         if detail is None:
             detail = title
         if problem_type is None:
-            problem_type = '/3gpp-m3/v1'
+            problem_type = '/3gpp-mas-configuration/v1'
         if instance[:len(problem_type)] == problem_type:
             instance = instance[len(problem_type):]
         # Store values

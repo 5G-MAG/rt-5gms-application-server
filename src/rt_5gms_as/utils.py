@@ -22,6 +22,7 @@ General utility functions
 '''
 
 import asyncio
+import inspect
 import os
 import os.path
 import subprocess
@@ -48,7 +49,8 @@ def find_executable_on_path(cmd, *, verify=None, extra_paths=None):
 
 def async_create_task(*args, **kwargs):
     'Wrapper for asyncio.create_task to remove unimplemented kwargs'
-    allowedkwargs = {key: value for key,value in kwargs.items() if key in asyncio.create_task.__kwdefaults__}
+    allowed = inspect.signature(asyncio.create_task).parameters
+    allowedkwargs = {key: value for key,value in kwargs.items() if key in allowed}
     return asyncio.create_task(*args, **allowedkwargs)
 
 async def traverse_directory_tree(rootpath: str, filtcoro: Callable[[str,bool,Any],Awaitable[Any]], result: Any):

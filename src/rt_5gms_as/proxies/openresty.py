@@ -387,8 +387,8 @@ class OpenRestyWebProxy(WebProxyInterface):
         server_configs: Dict[Tuple[str,Optional[str]], OpenRestyServerConfig] = {}
         for provisioning_session_id in self._context.getProvisioningSessionIds():
             i = self._context.findContentHostingConfigurationByProvisioningSession(provisioning_session_id)
-            if not i.ingest_configuration.pull or i.ingest_configuration.protocol != 'urn:3gpp:5gms:content-protocol:http-pull-ingest':
-                self.log.error("Can only handle http-pull-ingest sources at present")
+            if i.ingest_configuration.mode != 'PULL' or i.ingest_configuration.protocol not in ('urn:3gpp:5gms:content-protocol:http-pull', 'urn:3gpp:5gms:content-protocol:http-pull-ingest'):
+                self.log.error("Can only handle http-pull sources at present")
                 return False
             downstream_origin = i.ingest_configuration.base_url
             if downstream_origin is None:
