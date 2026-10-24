@@ -17,7 +17,8 @@
 from fastapi import Request
 from .exceptions import ProblemException, NoProblemException
 from .context import Context
-from .proxy_factory import WebProxyError
+from .schema_checks import content_hosting_configuration_min_items
+from .proxy_factory import WebProxyError, WebProxyRegexTimeout
 from typing import Tuple
 
 import regex
@@ -52,6 +53,29 @@ class M3Server:
         return self.__context
 
     @staticmethod
+    def __media_type(request):
+        # the media type without parameters (TS 29.500 clause 5.2.7.2: content format), "" if there is no Content-Type header
+        return request.headers.get('content-type', '').split(';')[0].strip().lower()
+
+    __RESOURCE_ID = regex.compile(r'^[A-Za-z0-9._:-]{1,200}$')
+
+    def __check_schema(self, request, content_hosting_configuration):
+        '''Reject a Content Hosting Configuration that breaks a constraint the generated models do not enforce
+
+        TS 29.500 clause 5.2.7.2: a request that does not comply with the schema is rejected with 400 (INVALID_MSG_FORMAT).
+        '''
+        problems = content_hosting_configuration_min_items(content_hosting_configuration)
+        if problems:
+            problem = ProblemException(status_code=400, title='Bad Request', detail='The request does not comply with the schema', instance=request.url.path, invalid_params=problems)
+            problem.object['cause'] = 'INVALID_MSG_FORMAT'
+            raise problem
+
+    def __check_id(self, request, af_resource_id):
+        # the identifier is used in a file name (certificates) and in the proxy configuration: no path separators or dot segments
+        if self.__RESOURCE_ID.match(af_resource_id) is None or af_resource_id in ('.', '..'):
+            raise ProblemException(status_code=400, title='Bad Request', detail='The resource identifier is not valid', instance=request.url.path, invalid_params=[{'param': 'afResourceId', 'reason': 'Only letters, digits and . _ : - are allowed'}])
+
+    @staticmethod
     def __not_implemented(request, what):
         # TS 29.500 clause 5.2.7.2: a request that the NF does not implement is answered with an error status and a ProblemDetails
         raise ProblemException(status_code=501, title='Not Implemented', detail='%s is not implemented by this 5GMS AS'%what, instance=request.url.path)
@@ -83,14 +107,15 @@ class M3Server:
         destroyed before.
         '''
         ctx = self.__ready(request)
-        if request.headers['content-type'] != 'application/json':
+        self.__check_id(request, afResourceId)
+        if self.__media_type(request) != 'application/json':
             raise ProblemException(status_code=415, title='Invalid media type', instance=request.url.path)
+        self.__check_schema(request, content_hosting_configuration)
         if ctx.haveContentHostingConfiguration(afResourceId):
             raise ProblemException(status_code=409, title='Content Hosting Configuration Already Exists', instance=request.url.path)
         if ctx.wasContentHostingConfigurationDestroyed(afResourceId):
             raise ProblemException(status_code=410, title='Content Hosting Configuration Gone', instance=request.url.path)
         ctx.appLog().info("Adding content hosting configuration %s..."%(afResourceId))
-        ctx.appLog().debug("afResourceId = %s, chc = %r", afResourceId, content_hosting_configuration)
         try:
             ctx.addContentHostingConfiguration(afResourceId, content_hosting_configuration)
         except Context.ValueError as err:
@@ -99,15 +124,27 @@ class M3Server:
         except Context.ConfigError as err:
             raise ProblemException(status_code=500, title='Error in Content Hosting Configuration', detail=str(err), instance=request.url.path)
         wp = ctx.webProxy()
-        # Start or reload the web proxy server
-        if not wp.daemonRunning():
-            ctx.appLog().info("Starting proxy daemon...")
-            await wp.writeConfiguration()
-            await wp.startDaemon()
-        else:
-            ctx.appLog().info("Reloading proxy daemon...")
-            await wp.reload()
-        raise NoProblemException(status_code=201, media_type='application/json', headers={'Location': request.url.path})
+        # Start or reload the web proxy server; if the proxy cannot use the configuration it is not kept
+        # (clause 4.5.4.3 for references that are invalid; for what the proxy cannot realise no clause: 500)
+        try:
+            if not wp.daemonRunning():
+                ctx.appLog().info("Starting proxy daemon...")
+                ok = await wp.writeConfiguration() and await wp.startDaemon()
+            else:
+                ctx.appLog().info("Reloading proxy daemon...")
+                ok = await wp.reloadAndWait() is not None
+        except Exception as err:
+            ctx.appLog().error("The web proxy could not use the Content Hosting Configuration %s: %s", afResourceId, err)
+            ok = False
+        if not ok:
+            ctx.deleteContentHostingConfiguration(afResourceId)
+            ctx.forgetDestroyedContentHostingConfiguration(afResourceId)
+            try:
+                await wp.reloadAndWait()
+            except Exception:
+                pass
+            raise ProblemException(status_code=500, title='Internal Server Error', detail='The web proxy cannot realise this Content Hosting Configuration', instance=request.url.path)
+        raise NoProblemException(status_code=201, media_type='application/json', headers={'Location': str(request.url)})
 
     async def replace_content_hosting_configuration(self, afResourceId, content_hosting_configuration, request=None):
         '''M3 Handler for "PUT .../content-hosting-configurations/{afResourceId}" (clause 4.5.4.5)
@@ -116,21 +153,36 @@ class M3Server:
         410 if destroyed before, 404 if it never existed.
         '''
         ctx = self.__ready(request)
+        self.__check_id(request, afResourceId)
+        self.__check_schema(request, content_hosting_configuration)
         old_chc = ctx.findContentHostingConfigurationByProvisioningSession(afResourceId)
         if old_chc is None:
             self.__gone_or_missing(request, ctx.wasContentHostingConfigurationDestroyed(afResourceId), 'Content Hosting Configuration')
         if old_chc == content_hosting_configuration:
             raise NoProblemException(status_code=204, media_type='application/json')
         ctx.appLog().info("Updating content hosting configuration %s..."%(afResourceId))
+        previous = old_chc
         try:
             if ctx.updateContentHostingConfiguration(afResourceId, content_hosting_configuration) is not True:
-                ctx.appLog().error("Assertion: content hosting configuration updated failed!")
-                raise ProblemException(status_code=500, title='Internal Server Error', detail='Assertion Error: ContentHostingConfiguration not updated when an update expected', instance=request.url.path)
+                # the representation is identical to the current one although the objects differ (clause 4.5.4.5: a "no-op")
+                raise NoProblemException(status_code=204, media_type='application/json')
         except Context.ValueError as err:
             raise ProblemException(status_code=400, title='Invalid Content Hosting Configuration', detail=str(err), instance=request.url.path, invalid_params=[{'param': err.args[1], 'reason': err.args[0]}])
         except Context.ConfigError as err:
             raise ProblemException(status_code=500, title='Error in Content Hosting Configuration', detail=str(err), instance=request.url.path)
-        await ctx.webProxy().reload()
+        try:
+            ok = await ctx.webProxy().reloadAndWait() is not None
+        except Exception as err:
+            ctx.appLog().error("The web proxy could not use the updated Content Hosting Configuration %s: %s", afResourceId, err)
+            ok = False
+        if not ok:
+            # the update is not kept: the state is the one immediately before the operation
+            ctx.updateContentHostingConfiguration(afResourceId, previous)
+            try:
+                await ctx.webProxy().reloadAndWait()
+            except Exception:
+                pass
+            raise ProblemException(status_code=500, title='Internal Server Error', detail='The web proxy cannot realise this Content Hosting Configuration', instance=request.url.path)
         raise NoProblemException(status_code=200, media_type='application/json')
 
     async def destroy_content_hosting_configuration(self, afResourceId, request=None):
@@ -139,24 +191,68 @@ class M3Server:
         Responds with 204; 410 if destroyed before, 404 if it never existed.
         '''
         ctx = self.__ready(request)
+        self.__check_id(request, afResourceId)
         if not ctx.haveContentHostingConfiguration(afResourceId):
             self.__gone_or_missing(request, ctx.wasContentHostingConfigurationDestroyed(afResourceId), 'Content Hosting Configuration')
         ctx.appLog().info("Deleting content hosting configuration %s..."%(afResourceId))
         wp = ctx.webProxy()
         ctx.deleteContentHostingConfiguration(afResourceId)
-        await wp.purgeAll(afResourceId)
-        await wp.reload()
+        # the resource is destroyed from here on (a later request gets 410); a proxy that cannot follow is reported, and the
+        # next reload brings it in line because its configuration is written from the stored state
+        try:
+            await wp.purgeAll(afResourceId)
+            reloaded = await wp.reloadAndWait()
+        except Exception as err:
+            ctx.appLog().error("The web proxy could not release the Content Hosting Configuration %s: %s", afResourceId, err)
+            reloaded = None
+        if reloaded is None:
+            raise ProblemException(status_code=500, title='Internal Server Error', detail='The Content Hosting Configuration is destroyed but the web proxy could not release it', instance=request.url.path)
         raise NoProblemException(status_code=204, media_type='application/json')
 
     async def interrogate_content_hosting_configuration_state(self, afResourceId, request=None):
-        '''GET .../content-hosting-configurations/{afResourceId}/active (clause 4.5.4.8)'''
-        self.__ready(request)
-        self.__not_implemented(request, 'Interrogating the state of a Content Hosting Configuration')
+        '''M3 Handler for "GET .../content-hosting-configurations/{afResourceId}/active" (clause 4.5.4.8)
+
+        Responds with 200 and a JSON boolean (true for active); 410 if destroyed before, 404 if it never existed.
+        '''
+        ctx = self.__ready(request)
+        self.__check_id(request, afResourceId)
+        if not ctx.haveContentHostingConfiguration(afResourceId):
+            self.__gone_or_missing(request, ctx.wasContentHostingConfigurationDestroyed(afResourceId), 'Content Hosting Configuration')
+        return ctx.isContentHostingConfigurationActive(afResourceId)
 
     async def modify_content_hosting_configuration_state(self, afResourceId, body, request=None):
-        '''POST .../content-hosting-configurations/{afResourceId}/active (clause 4.5.4.7)'''
-        self.__ready(request)
-        self.__not_implemented(request, '(De)activating a Content Hosting Configuration')
+        '''M3 Handler for "POST .../content-hosting-configurations/{afResourceId}/active" (clause 4.5.4.7)
+
+        The body is a single JSON boolean, true for active. The state changes at once (204, also when it is in the
+        requested state already), so the 202 of the clause, for a change in progress, is never needed.
+        410 if destroyed before, 404 if it never existed, 400 if the body is not a boolean.
+        '''
+        ctx = self.__ready(request)
+        self.__check_id(request, afResourceId)
+        if not ctx.haveContentHostingConfiguration(afResourceId):
+            self.__gone_or_missing(request, ctx.wasContentHostingConfigurationDestroyed(afResourceId), 'Content Hosting Configuration')
+        # the clause asks for a single JSON boolean: the framework would also accept strings such as "yes", so the body is read again
+        try:
+            desired = await request.json()
+        except ValueError:
+            desired = None
+        if not isinstance(desired, bool):
+            raise ProblemException(status_code=400, title='Bad Request', detail='The request body has to be a JSON boolean', instance=request.url.path)
+        if ctx.setContentHostingConfigurationActive(afResourceId, desired):
+            ctx.appLog().info("Content hosting configuration %s is now %s"%(afResourceId, 'active' if desired else 'inactive'))
+            try:
+                applied = await ctx.webProxy().reloadAndWait()
+            except Exception as err:
+                ctx.appLog().error("The web proxy could not be reloaded: %s", err)
+                applied = None
+            if applied is None:
+                # the stored state follows what the proxy serves
+                ctx.setContentHostingConfigurationActive(afResourceId, not desired)
+                raise ProblemException(status_code=500, title='Internal Server Error', detail='The web proxy could not be reloaded', instance=request.url.path)
+            if not applied:
+                # clause 4.5.4.7: the activation request is acceptable but not complete yet; the state is polled with the interrogate operation
+                raise NoProblemException(status_code=202, media_type='application/json')
+        raise NoProblemException(status_code=204, media_type='application/json')
 
     async def purge_content_hosting_cache(self, afResourceId, pattern, value=None, request=None):
         '''M3 Handler for "POST .../content-hosting-configurations/{afResourceId}/purge" (clause 4.5.4.9)
@@ -167,7 +263,8 @@ class M3Server:
         malformed, 410 if the configuration was destroyed, 404 if it never existed.
         '''
         ctx = self.__ready(request)
-        if request.headers['content-type'] != 'application/x-www-form-urlencoded':
+        self.__check_id(request, afResourceId)
+        if self.__media_type(request) != 'application/x-www-form-urlencoded':
             raise ProblemException(status_code=415, title='Invalid media type', instance=request.url.path)
         if not ctx.haveContentHostingConfiguration(afResourceId):
             self.__gone_or_missing(request, ctx.wasContentHostingConfigurationDestroyed(afResourceId), 'Content Hosting Configuration')
@@ -177,6 +274,8 @@ class M3Server:
             result = await ctx.webProxy().purgeUsingRegex(afResourceId, pattern)
         except regex.error as err:
             raise ProblemException(title='Bad Request', status_code=400, instance=request.url.path, detail='Bad regex: '+str(err), invalid_params=[{'param': 'pattern', 'reason': str(err)}])
+        except WebProxyRegexTimeout as err:
+            raise ProblemException(title='Bad Request', status_code=400, instance=request.url.path, detail=str(err), invalid_params=[{'param': 'pattern', 'reason': 'too expensive to match'}])
         except WebProxyError as err:
             raise ProblemException(title='Internal Error', status_code=500, instance=request.url.path, detail='Regex failed to compile: '+str(err))
         except Exception as err:
@@ -201,7 +300,8 @@ class M3Server:
         Responds with 201 and an empty body, 409 if it exists, 410 if destroyed before.
         '''
         ctx = self.__ready(request)
-        if request.headers['content-type'] != 'application/x-pem-file':
+        self.__check_id(request, afResourceId)
+        if self.__media_type(request) != 'application/x-pem-file':
             raise ProblemException(status_code=415, title='Invalid media type', instance=request.url.path)
         if ctx.haveCertificate(afResourceId):
             raise ProblemException(status_code=409, title='Certificate Already Exists', instance=request.url.path)
@@ -209,7 +309,7 @@ class M3Server:
             raise ProblemException(status_code=410, title='Certificate Gone', instance=request.url.path)
         ctx.appLog().info("Adding certificate %s..."%(afResourceId))
         ctx.addCertificate(afResourceId, body)
-        raise NoProblemException(status_code=201, media_type='application/json', headers={'Location': request.url.path})
+        raise NoProblemException(status_code=201, media_type='application/json', headers={'Location': str(request.url)})
 
     async def replace_server_certificate(self, afResourceId, body, request=None):
         '''M3 Handler for "PUT .../certificates/{afResourceId}" (clause 4.5.2.5)
@@ -217,13 +317,14 @@ class M3Server:
         Responds with 200 and an empty body, 204 if the PEM bundle is identical, 410 if destroyed before, 404 if it never existed.
         '''
         ctx = self.__ready(request)
+        self.__check_id(request, afResourceId)
         if not ctx.haveCertificate(afResourceId):
             self.__gone_or_missing(request, ctx.wasCertificateDestroyed(afResourceId), 'Server Certificate')
         ctx.appLog().info("Attempting to update certificate %s..."%(afResourceId))
         if not ctx.updateCertificate(afResourceId, body):
             raise NoProblemException(status_code=204, media_type='application/json')
         # Certificate changed, reload proxy server to pick up new cert
-        await ctx.webProxy().reload()
+        await ctx.webProxy().reloadAndWait()
         raise NoProblemException(status_code=200, media_type='application/json')
 
     async def destroy_server_certificate(self, afResourceId, request=None):
@@ -232,6 +333,7 @@ class M3Server:
         Responds with 204; 409 if still referenced; 410 if destroyed before, 404 if it never existed.
         '''
         ctx = self.__ready(request)
+        self.__check_id(request, afResourceId)
         if not ctx.haveCertificate(afResourceId):
             self.__gone_or_missing(request, ctx.wasCertificateDestroyed(afResourceId), 'Server Certificate')
         ctx.appLog().info("Deleting certificate %s..."%afResourceId)

@@ -30,6 +30,8 @@ import json
 import logging
 import os
 import os.path
+import re
+from urllib.parse import urlparse
 import sys
 from typing import Optional
 
@@ -50,6 +52,12 @@ log_level = info
 cache_dir = /var/cache/rt-5gms/as/cache
 docroot = /var/cache/rt-5gms/as/docroots
 certificates_cache = /var/cache/rt-5gms/as/certificates
+# The identifiers of destroyed resources are kept in this file, so that a destroyed identifier cannot be used again after
+# a restart (TS 26.512 clauses 4.5.2.3 and 4.5.4.3); by default destroyed-resources.json in the directory above certificates_cache
+# destroyed_resources_file = /var/cache/rt-5gms/as/destroyed-resources.json
+# The longest time in seconds that matching one cache entry against the regular expression of a purge request may take; a
+# pattern that exceeds it is refused with 400
+purge_regex_timeout = 1.0
 listen_address = ::
 http_port = 80
 https_port = 443
@@ -106,6 +114,7 @@ class Context(object):
         self.__destroyed_certificates = set()
         # Load the configurations
         self.__loadConfiguration(force=True)
+        self.__loadDestroyedIdentifiers()
         self.__loadCachedCertificates(force=True)
         self.__web_proxy = None
         self.__app_log = None
@@ -204,6 +213,32 @@ class Context(object):
         Check if a certificate existed and was destroyed
         '''
         return certificate_id in self.__destroyed_certificates
+
+    def forgetDestroyedContentHostingConfiguration(self, resource_id: str):
+        '''
+        A creation that was rolled back leaves no trace: the identifier is not "destroyed" and can be used again
+        '''
+        self.__destroyed_content_hosting_configurations.discard(resource_id)
+        self.__saveDestroyedIdentifiers()
+
+    def isContentHostingConfigurationActive(self, resource_id: str):
+        '''
+        Check if a ContentHostingConfiguration is active (the content is served at reference point M4)
+        '''
+        if resource_id not in self.__provisioning_sessions:
+            return False
+        return self.__provisioning_sessions[resource_id].get('active', True)
+
+    def setContentHostingConfigurationActive(self, resource_id: str, active: bool):
+        '''
+        (De)activate a ContentHostingConfiguration
+
+        Returns True if the state changed and False if it was in the requested state already.
+        '''
+        if self.isContentHostingConfigurationActive(resource_id) == active:
+            return False
+        self.__provisioning_sessions[resource_id]['active'] = active
+        return True
 
     def findContentHostingConfigurationByProvisioningSession(self, provisioning_session_id: str):
         '''
@@ -376,6 +411,8 @@ class Context(object):
         # What the web proxy can realise: pull ingest over HTTP (TS 26.512 table in clause 6.x lists both URNs, the second one is deprecated)
         if chc.ingest_configuration.mode != 'PULL' or chc.ingest_configuration.protocol not in ('urn:3gpp:5gms:content-protocol:http-pull', 'urn:3gpp:5gms:content-protocol:http-pull-ingest'):
             raise Context.ConfigError('This 5GMS AS can only ingest content by HTTP pull (mode PULL, protocol urn:3gpp:5gms:content-protocol:http-pull)')
+        # The values below end up in the web proxy configuration: only what cannot change its structure is accepted
+        self.__checkProxySafeValues(chc)
         # TS 26.512 clause 4.5.4.3: an invalid reference to another resource fails the operation with 400
         for distrib in chc.distribution_configurations:
             if distrib.content_preparation_template_id is not None:
@@ -390,9 +427,35 @@ class Context(object):
             old_chc_hash = self.__provisioning_sessions[provisioning_session_id]['chc_hash']
         self.__app_log.debug("CHC passed verification, checking for update: force=%r, new hash=%r, old hash=%r", force, chc_hash, old_chc_hash)
         if force or old_chc_hash is None or chc_hash != old_chc_hash:
-            self.__provisioning_sessions[provisioning_session_id] = {'chc': chc, 'chc_hash': chc_hash}
+            # an update keeps the (de)activated state
+            active = self.__provisioning_sessions[provisioning_session_id].get('active', True) if provisioning_session_id in self.__provisioning_sessions else True
+            self.__provisioning_sessions[provisioning_session_id] = {'chc': chc, 'chc_hash': chc_hash, 'active': active}
             return True
         return False
+
+    # a host name (also "*.example.com"), and a URL path without characters that mean something in a web proxy configuration
+    __HOSTNAME = re.compile(r'^(\*\.)?[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$')
+    __URL_PATH = re.compile(r"^[A-Za-z0-9._~/:@%+=,-]*$")
+
+    def __checkProxySafeValues(self, chc):
+        '''Check the values of a ContentHostingConfiguration that are written into the web proxy configuration
+
+        A quotation mark, a semicolon, a brace, a dollar sign, a space or a line end in them would let the sender change
+        the structure of the configuration. Raises Context.ValueError (reported as 400).
+        '''
+        base = urlparse(str(chc.ingest_configuration.base_url)) if chc.ingest_configuration.base_url is not None else None
+        if base is None or base.scheme not in ('http', 'https') or not base.hostname or self.__HOSTNAME.match(base.hostname) is None \
+                or self.__URL_PATH.match(base.path or '') is None or any(p is not None and p != '' and not self.__URL_PATH.match(p) for p in (base.params,)) \
+                or base.query or base.fragment:
+            raise Context.ValueError('The ingest baseURL has to be an http or https URL with a plain host name and path', 'ingestConfiguration.baseURL')
+        for distrib in chc.distribution_configurations:
+            if distrib.canonical_domain_name is None or self.__HOSTNAME.match(distrib.canonical_domain_name) is None:
+                raise Context.ValueError('The canonicalDomainName has to be a host name', 'distributionConfigurations.canonicalDomainName')
+            if distrib.domain_name_alias is not None and self.__HOSTNAME.match(distrib.domain_name_alias) is None:
+                raise Context.ValueError('The domainNameAlias has to be a host name', 'distributionConfigurations.domainNameAlias')
+            dpath = urlparse(str(distrib.base_url)).path
+            if self.__URL_PATH.match(dpath or '') is None:
+                raise Context.ValueError('The path of the baseURL has no characters that a web proxy configuration could take for syntax', 'distributionConfigurations.baseURL')
 
     def __delContentHostingConfiguration(self, provisioning_session_id: str):
         '''Delete a ContentHostingConfiguration
@@ -406,7 +469,48 @@ class Context(object):
         # entry.
         del self.__provisioning_sessions[provisioning_session_id]
         self.__destroyed_content_hosting_configurations.add(provisioning_session_id)
+        self.__saveDestroyedIdentifiers()
         return True
+
+    def __destroyedIdentifiersFile(self):
+        '''The file that keeps the identifiers of destroyed resources: the option destroyed_resources_file of the section
+        5gms_as, by default destroyed-resources.json next to the certificates cache directory'''
+        try:
+            name = self.__config.get('5gms_as', 'destroyed_resources_file')
+        except Exception:
+            name = None
+        if not name:
+            name = os.path.join(os.path.dirname(self.certificatesCacheDir().rstrip(os.sep)), 'destroyed-resources.json')
+        return name
+
+    def __loadDestroyedIdentifiers(self):
+        '''Read the identifiers of destroyed resources. TS 26.512 V19.3.0 clause 4.5.4.6: "Any subsequent attempt to recreate a
+        Content Hosting Configuration resource with the same resource identifier shall fail", also after a restart.'''
+        name = self.__destroyedIdentifiersFile()
+        try:
+            with open(name, 'r', encoding='utf-8') as fh:
+                data = json.load(fh)
+            self.__destroyed_content_hosting_configurations = set(str(i) for i in data.get('contentHostingConfigurations', []))
+            self.__destroyed_certificates = set(str(i) for i in data.get('certificates', []))
+        except FileNotFoundError:
+            pass
+        except (ValueError, OSError, AttributeError) as err:
+            # an unreadable file must not hide that resources were destroyed: refuse to start on it
+            raise Context.ConfigError('The file of destroyed resources %s cannot be read: %s' % (name, err))
+
+    def __saveDestroyedIdentifiers(self):
+        name = self.__destroyedIdentifiersFile()
+        data = {'contentHostingConfigurations': sorted(self.__destroyed_content_hosting_configurations),
+                'certificates': sorted(self.__destroyed_certificates)}
+        directory = os.path.dirname(name) or '.'
+        os.makedirs(directory, mode=0o755, exist_ok=True)
+        tmp = name + '.tmp'
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, 'w', encoding='utf-8') as fh:
+            json.dump(data, fh)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, name)
 
     def __loadConfiguration(self, force=False):
         '''Load application configuration
@@ -482,6 +586,7 @@ class Context(object):
         del self.__certificates[certificate_id]
         os.remove(os.path.join(self.certificatesCacheDir(),certificate_id))
         self.__destroyed_certificates.add(certificate_id)
+        self.__saveDestroyedIdentifiers()
         return True
 
     def __loadCachedCertificates(self, force: bool = False):

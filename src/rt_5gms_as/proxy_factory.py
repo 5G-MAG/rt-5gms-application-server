@@ -74,6 +74,10 @@ def list_registered_web_proxies():
 class WebProxyError(Exception):
     pass
 
+class WebProxyRegexTimeout(WebProxyError):
+    '''A regular expression took longer than the configured time on one cache entry'''
+    pass
+
 class WebProxyInterface(object):
     '''
     Base class for web proxy classes
@@ -211,6 +215,20 @@ class WebProxyInterface(object):
             return True
         return False
 
+    def daemonPid(self):
+        '''Return the process identifier of the daemon or None if it is not running'''
+        if self.__daemon['proc'] is not None:
+            return self.__daemon['proc'].pid
+        return None
+
+    async def reloadAndWait(self, timeout: float = 5.0):
+        '''Reload after context changes and wait until the new configuration is in use
+
+        Returns True if the new configuration is in use, False if the reload failed or was still in progress after
+        _timeout_ seconds. This base implementation cannot tell and returns the result of reload().
+        '''
+        return await self.reload()
+
     def rapidStarts(self):
         '''Return the number of times the daemon has started recently
 
@@ -270,7 +288,16 @@ class WebProxyInterface(object):
         if comp_regex is None:
             self._context.appLog().error('Regular expression %s failed to compile.', re)
             raise WebProxyError('Regular expression "%s" failed to compile.'%re)
-        return await self._purge(key_filter=lambda psid,path: psid==provisioningSessionId and comp_regex.match(path) is not None)
+        timeout = float(self._context.getConfigVar('5gms_as', 'purge_regex_timeout', '1.0'))
+
+        def matches(psid, path):
+            if psid != provisioningSessionId:
+                return False
+            try:
+                return comp_regex.match(path, timeout=timeout) is not None
+            except TimeoutError:
+                raise WebProxyRegexTimeout('The regular expression took longer than %s s on one cache entry' % timeout)
+        return await self._purge(key_filter=matches)
 
     async def purgeUsingPrefix(self, provisioningSessionId: str, prefix: str) -> int:
         '''Purge cache entries for the provisioning session with a path prefix

@@ -159,7 +159,7 @@ async def __app(context):
     server.setContext(context)
 
     m3_app = FastAPI(title='5G-MAG M3', description='5GMS AS M3 API Copyright © 2022 British Broadcasting Corporation All rights reserved.', version='0.0.0', debug=False, default_response_class=AppJSONResponse)
-    m3_app.debug = True
+    m3_app.debug = False
 
     @m3_app.exception_handler(ProblemException)
     async def problem_exception_handler(request, exc):

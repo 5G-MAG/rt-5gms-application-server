@@ -24,6 +24,7 @@ reverse proxy.
 '''
 
 import aiofiles
+import asyncio
 import datetime
 import importlib.resources
 import logging
@@ -386,6 +387,9 @@ class OpenRestyWebProxy(WebProxyInterface):
         # Create the server configurations from the CHCs
         server_configs: Dict[Tuple[str,Optional[str]], OpenRestyServerConfig] = {}
         for provisioning_session_id in self._context.getProvisioningSessionIds():
+            if not self._context.isContentHostingConfigurationActive(provisioning_session_id):
+                # a deactivated Content Hosting Configuration stays configured but is not served at M4 (TS 26.512 clause 4.5.4.7)
+                continue
             i = self._context.findContentHostingConfigurationByProvisioningSession(provisioning_session_id)
             if i.ingest_configuration.mode != 'PULL' or i.ingest_configuration.protocol not in ('urn:3gpp:5gms:content-protocol:http-pull', 'urn:3gpp:5gms:content-protocol:http-pull-ingest'):
                 self.log.error("Can only handle http-pull sources at present")
@@ -516,6 +520,36 @@ class OpenRestyWebProxy(WebProxyInterface):
                 return False
         return True
 
+    @staticmethod
+    def __workerPids(master_pid):
+        '''The process identifiers of the child processes (the workers) of the nginx master process, or None'''
+        try:
+            with open('/proc/%d/task/%d/children'%(master_pid, master_pid)) as children:
+                return set(int(p) for p in children.read().split())
+        except (OSError, ValueError):
+            return None
+
+    async def reloadAndWait(self, timeout: float = 5.0):
+        '''Reload nginx and wait until all the worker processes of the old configuration have been replaced
+
+        Returns True when the new configuration is in use for new connections, None if the reload failed and False
+        if the workers had not been replaced after _timeout_ seconds (the reload is still in progress).
+        '''
+        master = self.daemonPid()
+        before = self.__workerPids(master) if master is not None else None
+        if not await self.reload():
+            return None
+        if master is None or before is None:
+            return False
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout
+        while loop.time() < deadline:
+            now = self.__workerPids(master)
+            if now and not (now & before):
+                return True
+            await asyncio.sleep(0.05)
+        return False
+
     async def _getCacheFilesAndKeys(self) -> List[Tuple[str,str,str]]:
         self._context.appLog().debug('Getting NGINX cache entries...')
         proxy_cache_path = self._context.getConfigVar('5gms_as','cache_dir')
@@ -558,7 +592,11 @@ class OpenRestyWebProxy(WebProxyInterface):
         return (filename, prov_sess, urlpath)
 
     def __key_to_prov_sess_and_url_path(self, key: str) -> Tuple[str,str]:
-        return tuple(key.split(':u='))
+        # the first separator ends the provisioning session identifier: the URL path may itself contain ":u="
+        parts = key.split(':u=', 1)
+        if len(parts) != 2:
+            raise ValueError('cache key without a provisioning session: %r' % key)
+        return tuple(parts)
 
     @classmethod
     def __ensure_modules(cls, cmd):
