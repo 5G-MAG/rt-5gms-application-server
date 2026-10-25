@@ -437,6 +437,17 @@ class Context(object):
     __HOSTNAME = re.compile(r'^(\*\.)?[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$')
     __URL_PATH = re.compile(r"^[A-Za-z0-9._~/:@%+=,-]*$")
 
+    @staticmethod
+    def __regexSafe(pattern: str) -> bool:
+        '''A regular expression that compiles and that can be written between quotation marks into the web proxy configuration'''
+        if '"' in pattern or '\n' in pattern or '\r' in pattern or pattern.endswith('\\'):
+            return False
+        try:
+            re.compile(pattern)
+        except re.error:
+            return False
+        return True
+
     def __checkProxySafeValues(self, chc):
         '''Check the values of a ContentHostingConfiguration that are written into the web proxy configuration
 
@@ -456,6 +467,27 @@ class Context(object):
             dpath = urlparse(str(distrib.base_url)).path
             if self.__URL_PATH.match(dpath or '') is None:
                 raise Context.ValueError('The path of the baseURL has no characters that a web proxy configuration could take for syntax', 'distributionConfigurations.baseURL')
+            for cidx, cache in enumerate(distrib.caching_configurations or []):
+                if not self.__regexSafe(cache.url_pattern_filter):
+                    raise Context.ValueError('The urlPatternFilter has to be a regular expression without a quotation mark or line end', f'distributionConfigurations.cachingConfigurations[{cidx}].urlPatternFilter')
+            sig = distrib.url_signature
+            if sig is not None:
+                # TS 26.510 V19.2.0 table 8.8.3.1-1: urlSignature
+                if not self.__regexSafe(sig.url_pattern):
+                    raise Context.ValueError('The urlPattern has to be a regular expression without a quotation mark or line end', 'distributionConfigurations.urlSignature.urlPattern')
+                if not 6 <= len(sig.passphrase) <= 50:
+                    raise Context.ValueError('The passphrase has between 6 and 50 characters', 'distributionConfigurations.urlSignature.passphrase')
+                if sig.use_ip_address and not sig.ip_address_name:
+                    raise Context.ValueError('ipAddressName is needed when useIPAddress is true', 'distributionConfigurations.urlSignature.ipAddressName')
+                for name in (sig.token_name, sig.passphrase_name, sig.token_expiry_name, sig.ip_address_name):
+                    if name is not None and re.match(r'^[A-Za-z0-9_.~-]+$', name) is None:
+                        raise Context.ValueError('A parameter name has only unreserved URL characters', 'distributionConfigurations.urlSignature')
+            if distrib.geo_fencing is not None:
+                # TS 26.512 V19.3.0 clause 7.6.4.6: the zone of a UE is known to the AS only through the operator's address ranges
+                if distrib.geo_fencing.locator_type != 'urn:3gpp:media-delivery:locator-type:iso3166':
+                    raise Context.ValueError('Only the locator type urn:3gpp:media-delivery:locator-type:iso3166 is supported', 'distributionConfigurations.geoFencing.locatorType')
+                if not self.getConfigVar('5gms_as', 'geo_ranges_file', ''):
+                    raise Context.ValueError('Geofencing needs the AS option geo_ranges_file (the address ranges of the countries)', 'distributionConfigurations.geoFencing')
 
     def __delContentHostingConfiguration(self, provisioning_session_id: str):
         '''Delete a ContentHostingConfiguration

@@ -25,6 +25,7 @@ reverse proxy.
 
 import aiofiles
 import asyncio
+import json
 import datetime
 import importlib.resources
 import logging
@@ -36,7 +37,7 @@ import signal
 import subprocess
 import traceback
 
-from typing import Optional, Tuple, List, Any, Set
+from typing import Dict, Optional, Tuple, List, Any, Set
 from urllib.parse import urlparse
 
 from ..proxy_factory import WebProxyInterface, add_web_proxy
@@ -53,6 +54,11 @@ class OpenRestyLocationConfig(object):
         self.downstream_prefix_url: str = downstream_prefix_url
         self.provisioning_session: str = provisioning_session
         self.rewrite_rules: List[Tuple[str,str]] = []
+        # TS 26.512 V19.3.0 clauses 7.6.4.2, 7.6.4.5 and 7.6.4.6 and the domain name alias of TS 26.510 table 8.8.3.1-1
+        self.caching_rules: List[Dict[str, Any]] = []
+        self.url_signature: Optional[Dict[str, Any]] = None
+        self.geo_fencing: Optional[Dict[str, Any]] = None
+        self.cors_aliases: List[str] = []
 
         # Ensure prefix URLs end with a '/'
         if self.path_prefix[0] != '/':
@@ -61,6 +67,41 @@ class OpenRestyLocationConfig(object):
             self.path_prefix += '/'
         if self.downstream_prefix_url[-1] != '/':
             self.downstream_prefix_url += '/'
+
+    @staticmethod
+    def safe_pattern(pattern: str) -> bool:
+        '''A regular expression that can be written in a configuration file and that compiles'''
+        if '"' in pattern or '\n' in pattern or '\r' in pattern or pattern.endswith('\\'):
+            return False
+        try:
+            regex.compile(pattern)
+        except regex.error:
+            return False
+        return True
+
+    def addCachingRule(self, url_pattern_filter: str, no_cache: Optional[bool], max_age: Optional[int], status_codes: Optional[List[int]]) -> bool:
+        if not self.safe_pattern(url_pattern_filter):
+            self.__context.appLog().error("Unsafe or invalid urlPatternFilter: %s", url_pattern_filter)
+            return False
+        self.caching_rules.append({'pattern': url_pattern_filter, 'noCache': bool(no_cache), 'maxAge': max_age,
+                                   'statusCodes': sorted(status_codes) if status_codes else None})
+        return True
+
+    def setUrlSignature(self, sig: Any) -> bool:
+        if not self.safe_pattern(sig.url_pattern):
+            self.__context.appLog().error("Unsafe or invalid urlSignature.urlPattern: %s", sig.url_pattern)
+            return False
+        self.url_signature = {'urlPattern': sig.url_pattern, 'tokenName': sig.token_name, 'passphraseName': sig.passphrase_name,
+                              'passphrase': sig.passphrase, 'tokenExpiryName': sig.token_expiry_name,
+                              'useIPAddress': bool(sig.use_ip_address), 'ipAddressName': sig.ip_address_name}
+        return True
+
+    def setGeoFencing(self, geo: Any) -> None:
+        self.geo_fencing = {'locatorType': geo.locator_type, 'locators': list(geo.locators)}
+
+    def addCorsAlias(self, alias: str) -> None:
+        if alias not in self.cors_aliases:
+            self.cors_aliases.append(alias)
 
     def addRewriteRule(self, request_path_pattern: str, mapped_path: str) -> bool:
         (regex, replace) = self.__transform_rewrite_rules(request_path_pattern,mapped_path)
@@ -82,20 +123,79 @@ class OpenRestyLocationConfig(object):
         for a in self.rewrite_rules:
             if a not in other.rewrite_rules:
                 return False
+        if self.caching_rules != other.caching_rules or self.url_signature != other.url_signature or \
+                self.geo_fencing != other.geo_fencing or sorted(self.cors_aliases) != sorted(other.cors_aliases):
+            return False
         return True
 
     def __ne__(self, other: "OpenRestyLocationConfig") -> bool:
         return not self == other
 
-    async def config(self, indent: int = 0) -> str:
-        prefix = ' ' * indent
-        ret = f'''{prefix}location {self.path_prefix} {{
-{prefix}  set $downstream_prefix_url "{self.downstream_prefix_url}";
+    def __lua_json(self) -> str:
+        '''The configuration of the access rules of this location as a Lua long string'''
+        text = json.dumps({'signature': self.url_signature, 'geo': self.geo_fencing, 'cors': self.cors_aliases})
+        # a long string cannot contain its own closing brackets
+        assert ']==]' not in text
+        return '[==[' + text + ']==]'
+
+    def __cache_directives(self, prefix: str, rule: Optional[Dict[str, Any]]) -> str:
+        '''The directives of a caching rule (TS 26.512 V19.3.0 clause 7.6.4.2); a location without a rule keeps what the origin directs'''
+        if rule is None:
+            return ''
+        codes = ' '.join(str(c) for c in rule['statusCodes']) if rule['statusCodes'] else '200 206 301 302 303 307 308 404'
+        ret = f'{prefix}  proxy_ignore_headers Cache-Control Expires X-Accel-Expires Set-Cookie Vary;\n'
+        ret += f'{prefix}  proxy_hide_header Cache-Control;\n{prefix}  proxy_hide_header Expires;\n'
+        if rule['noCache']:
+            ret += f'{prefix}  proxy_no_cache 1;\n{prefix}  proxy_cache_bypass 1;\n'
+            ret += f'{prefix}  add_header Cache-Control "no-cache, no-store, max-age=0" always;\n'
+        else:
+            if rule['maxAge'] is not None:
+                ret += f'{prefix}  proxy_cache_valid {codes} {int(rule["maxAge"])}s;\n'
+                ret += f'{prefix}  add_header Cache-Control "max-age={int(rule["maxAge"])}" always;\n'
+            else:
+                # no maxAge: cached until the cache is purged or the configuration destroyed
+                ret += f'{prefix}  proxy_cache_valid {codes} 10y;\n'
+        return ret
+
+    def __location_body(self, prefix: str, rule: Optional[Dict[str, Any]]) -> str:
+        '''The directives of the location, with those of the caching rule if there is one'''
+        ret = f'''{prefix}  set $downstream_prefix_url "{self.downstream_prefix_url}";
 {prefix}  set $location_prefix "{self.path_prefix}";
 '''
         for (regex, replace) in self.rewrite_rules:
             ret += f'{prefix}  rewrite "{regex}" "{replace}" break;\n'
-        ret += f'''{prefix}  proxy_cache_key "{self.provisioning_session}:u=$uri";
+        ret += f'{prefix}  proxy_cache_key "{self.provisioning_session}:u=$uri";\n'
+        if rule is None:
+            # a cookie of the origin is not forwarded (clause 7.6.4.2) and does not keep the resource out of the cache
+            ret += f'{prefix}  proxy_ignore_headers Set-Cookie;\n'
+        ret += self.__cache_directives(prefix, rule)
+        # CMCD data is for the collector of the AS and not for the origin (M2d): its request headers are not passed on
+        for hdr in ('CMCD-Request', 'CMCD-Object', 'CMCD-Status', 'CMCD-Session'):
+            ret += f'{prefix}  proxy_set_header {hdr} "";\n'
+        access = self.url_signature is not None or self.geo_fencing is not None or len(self.cors_aliases) > 0
+        if access:
+            ret += f'''{prefix}  access_by_lua_block {{
+{prefix}    local cfg = m4daccess.cfg("{self.provisioning_session}:{self.path_prefix}", {self.__lua_json()})
+{prefix}    if ngx.req.get_method() == "OPTIONS" and #cfg.cors > 0 then
+{prefix}      m4daccess.cors(cfg.cors)
+{prefix}      return ngx.exit(204)
+{prefix}    end
+{prefix}    if cfg.signature and not m4daccess.verify_signature(cfg.signature) then
+{prefix}      return ngx.exit(ngx.HTTP_FORBIDDEN)
+{prefix}    end
+{prefix}    if cfg.geo and not m4daccess.check_geo(cfg.geo, "{self.__context.getConfigVar('5gms_as', 'geo_ranges_file', '')}") then
+{prefix}      return ngx.exit(ngx.HTTP_FORBIDDEN)
+{prefix}    end
+{prefix}  }}
+'''
+        ret += f'''{prefix}  header_filter_by_lua_block {{
+{prefix}    m4daccess.filter_origin_headers()
+'''
+        if len(self.cors_aliases) > 0:
+            ret += f'''{prefix}    local cfg = m4daccess.cfg("{self.provisioning_session}:{self.path_prefix}", {self.__lua_json()})
+{prefix}    m4daccess.cors(cfg.cors)
+'''
+        ret += f'''{prefix}  }}
 {prefix}  rewrite_by_lua_block {{
 {prefix}    -- ngx.log(ngx.DEBUG,"rewrite_by_lua_block(",ngx.var.uri,", ",ngx.var.downstream_prefix_url,")")
 {prefix}    local uri = ngx.var.uri
@@ -117,12 +217,32 @@ class OpenRestyLocationConfig(object):
 {prefix}        end
 {prefix}      end
 {prefix}    end
+{prefix}    -- the CMCD query parameter is not passed to the origin either
+{prefix}    local args = ngx.var.args
+{prefix}    if args then
+{prefix}      ngx.var.args = ngx.re.gsub(args, "(^|&)CMCD=[^&]*", "", "jo")
+{prefix}    end
 {prefix}  }}
 {prefix}  proxy_pass $downstream_prefix_url;
 {prefix}  proxy_intercept_errors on;
-{prefix}  error_page 301 302 307 = @handle_redirect;
-{prefix}}}
+{prefix}  error_page 301 302 303 307 308 = @handle_redirect;
 '''
+        return ret
+
+    async def config(self, indent: int = 0) -> str:
+        prefix = ' ' * indent
+        ret = f'{prefix}location {self.path_prefix} {{\n'
+        ret += self.__location_body(prefix, None)
+        # the caching rules are matched in order, the first match applies (TS 26.512 V19.3.0 clause 7.6.4.2): nginx takes the first
+        # matching regular expression location inside this one. A pattern that starts with ^ starts at the service location.
+        for rule in self.caching_rules:
+            pattern = rule['pattern']
+            if pattern.startswith('^'):
+                pattern = '^' + regex.escape(self.path_prefix[:-1]) + pattern[1:]
+            ret += f'{prefix}  location ~ "{pattern}" {{\n'
+            ret += self.__location_body(prefix + '  ', rule)
+            ret += f'{prefix}  }}\n'
+        ret += f'{prefix}}}\n'
         return ret
 
     def __transform_rewrite_rules(self, rule_regex, replace):
@@ -148,6 +268,12 @@ class OpenRestyLocationConfig(object):
 
         # Get number of bracketed expressions for back-references from regex
         brackets = compiled_regex.groups
+
+        if rule_regex[0] == '^':
+            # the pattern is relative to the service location (the baseURL of the distribution), which the request URI carries in front
+            location = self.path_prefix[:-1]
+            rule_regex = '^' + regex.escape(location) + rule_regex[1:]
+            replace = location + replace
 
         # pathRewriteRule only deals with replacing a path part, so we need to
         # include the rest of the URL path in the nginx rewrite rule.
@@ -424,6 +550,15 @@ class OpenRestyWebProxy(WebProxyInterface):
                     for rr in dc.path_rewrite_rules:
                         if not locn.addRewriteRule(rr.request_path_pattern, rr.mapped_path):
                             return False
+                for cc in dc.caching_configurations or []:
+                    if not locn.addCachingRule(cc.url_pattern_filter, cc.caching_directives.no_cache, cc.caching_directives.max_age, cc.caching_directives.status_code_filters):
+                        return False
+                if dc.url_signature is not None and not locn.setUrlSignature(dc.url_signature):
+                    return False
+                if dc.geo_fencing is not None:
+                    locn.setGeoFencing(dc.geo_fencing)
+                if dc.domain_name_alias is not None:
+                    locn.addCorsAlias(dc.domain_name_alias)
                 server_configs[sk].addLocation(locn)
                 if dc.domain_name_alias is not None:
                     server_configs[dsk].addLocation(locn)
