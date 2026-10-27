@@ -18,31 +18,32 @@
 5G-MAG Reference Tools: M3 client testing app
 =============================================
 
-This application will connect to a server which provides an M3 interface, issue
+This application will connect to a server which provides the Release 19 M3 interface (Mas_Configuration API, base path /3gpp-mas-configuration/v1), issue
 a client request and display the response.
 
 Usage:
     m3_client_cli.py -h | --help
-    m3_client_cli.py -c | --certificate <connect>
-    m3_client_cli.py -c | --certificate <connect> (add|update) <certificate-id> <pem-file>
-    m3_client_cli.py -c | --certificate <connect> delete <certificate-id>
-    m3_client_cli.py -H | --content-hosting-configuration <connect>
-    m3_client_cli.py -H | --content-hosting-configuration <connect> (add|update) <provisioning-session-id> <content-hosting-configuration-json-file>
-    m3_client_cli.py -H | --content-hosting-configuration <connect> delete <provisioning-session-id>
-    m3_client_cli.py -H | --content-hosting-configuration <connect> purge <provisioning-session-id> [<pattern>]
+    m3_client_cli.py -c | --certificate [-t <token>] <connect>
+    m3_client_cli.py -c | --certificate [-t <token>] <connect> (add|update) <certificate-id> <pem-file>
+    m3_client_cli.py -c | --certificate [-t <token>] <connect> delete <certificate-id>
+    m3_client_cli.py -H | --content-hosting-configuration [-t <token>] <connect>
+    m3_client_cli.py -H | --content-hosting-configuration [-t <token>] <connect> (add|update) <af-resource-id> <content-hosting-configuration-json-file>
+    m3_client_cli.py -H | --content-hosting-configuration [-t <token>] <connect> delete <af-resource-id>
+    m3_client_cli.py -H | --content-hosting-configuration [-t <token>] <connect> purge <af-resource-id> <pattern>
 
 Parameters:
     connect                  Hostname:Port of the server providing M3.
-    provisioning-session-id  Provisioning Session Identifier.
-    certificate-id           Certificate Identifier.
+    af-resource-id           afResourceId of the Content Hosting Configuration, chosen by the 5GMS AF.
+    certificate-id           afResourceId of the Server Certificate, chosen by the 5GMS AF.
     pem-file                 Server PEM format X.509 public certificate, private key and intermediate CA certificates.
     content-hosting-configuration-json-file
                              Filename of a ContentHostingConfiguration in JSON format.
-    pattern                  Regular expression to match the cache entry URL paths to delete.
+    pattern                  Regular expression to match the media resource URLs to purge (sent as the form key pattern).
 
 Options:
     -h --help                Display the command help
     -v --version             Display command version
+    -t --token <token>       OAuth 2.0 access token for the Authorization: Bearer header (needed when the AS has an [5gms_as.oauth] section).
     -c --certificate         List known certificates or perform a certificate operation.
     -H --content-hosting-configuration
                              List known ContentHostingConfigurations or perform an operation on ContentHostingConfigurations.
@@ -87,17 +88,17 @@ def main():
     (server_host, server_port) = args['<connect>'].split(':')
     host_address = (server_host, int(server_port))
 
-    m3_client = M3Client(host_address)
+    m3_client = M3Client(host_address, access_token=args['--token'])
 
     operations = [
         {'flags': ['--certificate','add'], 'fn': m3_client.addCertificateFromPemFile, 'args': ['<certificate-id>', '<pem-file>'], 'format': bool_result},
         {'flags': ['--certificate','update'], 'fn': m3_client.updateCertificateFromPemFile, 'args': ['<certificate-id>', '<pem-file>'], 'format': bool_result},
         {'flags': ['--certificate','delete'], 'fn': m3_client.deleteCertificate, 'args': ['<certificate-id>'], 'format': bool_result},
         {'flags': ['--certificate'], 'fn': m3_client.listCertificates, 'args': [], 'format': certificates_list_result},
-        {'flags': ['--content-hosting-configuration','add'], 'fn': m3_client.addContentHostingConfigurationFromJsonFile, 'args': ['<provisioning-session-id>', '<content-hosting-configuration-json-file>'], 'format': bool_result},
-        {'flags': ['--content-hosting-configuration','update'], 'fn': m3_client.updateContentHostingConfigurationFromJsonFile, 'args': ['<provisioning-session-id>', '<content-hosting-configuration-json-file>'], 'format': bool_result},
-        {'flags': ['--content-hosting-configuration','delete'], 'fn': m3_client.deleteContentHostingConfiguration, 'args': ['<provisioning-session-id>'], 'format': bool_result},
-        {'flags': ['--content-hosting-configuration','purge'], 'fn': m3_client.purgeContentHostingCache, 'args': ['<provisioning-session-id>'], 'kwargs': [('pattern','<pattern>')], 'format': purge_result},
+        {'flags': ['--content-hosting-configuration','add'], 'fn': m3_client.addContentHostingConfigurationFromJsonFile, 'args': ['<af-resource-id>', '<content-hosting-configuration-json-file>'], 'format': bool_result},
+        {'flags': ['--content-hosting-configuration','update'], 'fn': m3_client.updateContentHostingConfigurationFromJsonFile, 'args': ['<af-resource-id>', '<content-hosting-configuration-json-file>'], 'format': bool_result},
+        {'flags': ['--content-hosting-configuration','delete'], 'fn': m3_client.deleteContentHostingConfiguration, 'args': ['<af-resource-id>'], 'format': bool_result},
+        {'flags': ['--content-hosting-configuration','purge'], 'fn': m3_client.purgeContentHostingCache, 'args': ['<af-resource-id>'], 'kwargs': [('pattern','<pattern>')], 'format': purge_result},
         {'flags': ['--content-hosting-configuration'], 'fn': m3_client.listContentHostingConfigurations, 'args': [], 'format': chc_list_result},
         ]
 

@@ -47,6 +47,7 @@ from .server import server
 from .utils import async_create_task
 from .exceptions import ProblemException, NoProblemException
 from .openapi_5g.apis.default_api import router as m3_router
+from .oauth import Authorizer
 
 __pkg_version = 'Devel'
 try:
@@ -201,6 +202,24 @@ async def __app(context):
         # errors raised by the framework itself (unknown resource 404, method not allowed 405) are also ProblemDetails (clause 7.1.7 of TS 26.510)
         problem = ProblemException(status_code=exc.status_code, title=str(exc.detail), instance=request.url.path)
         return AppJSONResponse(status_code=exc.status_code, content=problem.object, headers=getattr(exc, 'headers', None), media_type='application/problem+json')
+
+    # OAuth 2.0 at M3 (TS 26.512 clause 6.6.3): the token endpoint and the check of the access token, if [5gms_as.oauth] is configured
+    authorizer = Authorizer(context)
+
+    @m3_app.middleware('http')
+    async def oauth_middleware(request, call_next):
+        path = request.url.path
+        if path == '/oauth2/token':
+            response = authorizer.token_endpoint(request.method, request.headers.get('content-type'), await request.body(),
+                                                 request.headers.get('authorization'))
+        elif path.startswith('/3gpp-mas-configuration/'):
+            response = authorizer.check(request.method, path, request.headers.get('authorization'))
+        else:
+            response = None
+        if response is None:
+            return await call_next(request)
+        response.headers['Server'] = _app_server_hdr
+        return response
 
     # TODO: Create HTTP server to handle M2 interface and add task to main loop
 

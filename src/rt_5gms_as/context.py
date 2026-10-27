@@ -295,6 +295,14 @@ class Context(object):
         '''
         return self.__config.get(section, varname, fallback=default)
 
+    def getConfigSections(self, prefix):
+        '''The names of the configuration file sections that start with _prefix_'''
+        return [s for s in self.__config.sections() if s.startswith(prefix)]
+
+    def hasConfigSection(self, name):
+        '''Whether the configuration file has the section _name_'''
+        return self.__config.has_section(name)
+
     def haveCertificate(self, certificate_id):
         '''Check is a certificate ID exists
 

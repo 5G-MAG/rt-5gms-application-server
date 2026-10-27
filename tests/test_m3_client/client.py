@@ -30,6 +30,7 @@ import os
 import httpx
 import socket
 import sys
+import urllib.parse
 from typing import Optional, Union, Tuple, List, TypedDict
 
 class InvalidParamMandatory(TypedDict):
@@ -154,18 +155,22 @@ class M3Client(object):
     '''M3 API Client Class
     '''
 
-    def __init__(self, host_address: Tuple[str,int]):
+    def __init__(self, host_address: Tuple[str,int], access_token: Optional[str] = None):
+        '''access_token: OAuth 2.0 bearer token, needed when the AS has an [5gms_as.oauth] section'''
         self.__host_address = host_address
+        self.__access_token = access_token
         self.__session = None
         self.__log = logging.getLogger(__name__)
 
     async def __do_request(self, method: str, url_suffix: str, body: Union[str,bytes], content_type: str, headers: Optional[dict] = None) -> dict:
         if isinstance(body, str):
-            body = bytes(body)
+            body = body.encode('utf-8')
         req_headers = {'Content-Type': content_type}
+        if self.__access_token is not None:
+            req_headers['Authorization'] = 'Bearer '+self.__access_token
         if headers is not None:
             req_headers.update(headers)
-        url = 'http://'+self.__host_address[0]+':'+str(self.__host_address[1])+'/3gpp-m3/v1'+url_suffix
+        url = 'http://'+self.__host_address[0]+':'+str(self.__host_address[1])+'/3gpp-mas-configuration/v1'+url_suffix
         s = socket.socket(type=socket.SOCK_DGRAM)
         s.connect(self.__host_address)
         localip=s.getsockname()[0]
@@ -186,12 +191,14 @@ class M3Client(object):
         if result['status_code'] == 201:
             self.__log.info('Certificate added successfully as %s', result['headers']['Location'])
             return True
-        elif result['status_code'] == 405:
+        elif result['status_code'] == 409:
             raise M3ClientException('Certificate already exists!', status_code=result['status_code'])
+        elif result['status_code'] == 410:
+            raise M3ClientException('Certificate was destroyed earlier and its identifier cannot be reused!', status_code=result['status_code'])
         elif result['status_code'] == 413:
             raise M3ClientException('Certificate data too big for server!', status_code=result['status_code'])
         elif result['status_code'] == 414:
-            raise M3ClientException('URI too long for server, try shorter provisioning session and/or certficate ids.', status_code=result['status_code'])
+            raise M3ClientException('URI too long for server, try shorter certificate id.', status_code=result['status_code'])
         elif result['status_code'] == 415:
             raise M3ClientException('Unsupported media-type', status_code=result['status_code'])
         elif result['status_code'] == 500:
@@ -209,7 +216,7 @@ class M3Client(object):
                 raise M3ServerException(msg, status_code=result['status_code'], problem_detail=pd)
 
     async def updateCertificateFromPemFile(self, certificate_id: str, pem_filename: str) -> bool:
-        async with aiofiles.open(pem_file, mode='rb') as pem_in:
+        async with aiofiles.open(pem_filename, mode='rb') as pem_in:
             pem = await pem_in.read()
         return await self.updateCertificateFromPemData(certificate_id, pem)
 
@@ -223,10 +230,12 @@ class M3Client(object):
             return False
         elif result['status_code'] == 404:
             raise M3ClientException('Certificate not found!', status_code=result['status_code'])
+        elif result['status_code'] == 410:
+            raise M3ClientException('Certificate was destroyed earlier and its identifier cannot be reused!', status_code=result['status_code'])
         elif result['status_code'] == 413:
             raise M3ClientException('Certificate data too big for server!', status_code=result['status_code'])
         elif result['status_code'] == 414:
-            raise M3ClientException('URI too long for server, try shorter provisioning session and/or certficate ids.', status_code=result['status_code'])
+            raise M3ClientException('URI too long for server, try shorter certificate id.', status_code=result['status_code'])
         elif result['status_code'] == 415:
             raise M3ClientException('Unsupported media-type', status_code=result['status_code'])
         elif result['status_code'] == 500:
@@ -252,10 +261,12 @@ class M3Client(object):
             raise M3ClientException('Certificate not found!', status_code=result['status_code'])
         elif result['status_code'] == 409:
             raise M3ClientException('Certificate is in use by a ContentHostingConfiguration!', status_code=result['status_code'])
+        elif result['status_code'] == 410:
+            raise M3ClientException('Certificate was destroyed earlier and its identifier cannot be reused!', status_code=result['status_code'])
         elif result['status_code'] == 413:
             raise M3ClientException('Certificate data too big for server!', status_code=result['status_code'])
         elif result['status_code'] == 414:
-            raise M3ClientException('URI too long for server, try shorter provisioning session and/or certficate ids.', status_code=result['status_code'])
+            raise M3ClientException('URI too long for server, try shorter certificate id.', status_code=result['status_code'])
         elif result['status_code'] == 500:
             raise M3ServerException('Internal Server Error', status_code=result['status_code'])
         elif result['status_code'] == 503:
@@ -288,26 +299,28 @@ class M3Client(object):
             else:
                 raise M3ServerException(msg, status_code=result['status_code'], problem_detail=pd)
 
-    async def addContentHostingConfigurationFromJsonFile(self, provisioning_session_id: str, chc_filename: str) -> bool:
+    async def addContentHostingConfigurationFromJsonFile(self, af_resource_id: str, chc_filename: str) -> bool:
         async with aiofiles.open(chc_filename, mode='rb') as chc_in:
             chc = await chc_in.read()
-        return await self.addContentHostingConfigurationFromJsonString(provisioning_session_id, chc)
+        return await self.addContentHostingConfigurationFromJsonString(af_resource_id, chc)
 
-    async def addContentHostingConfigurationFromObject(self, provisioning_session_id: str, chc: dict) -> bool:
+    async def addContentHostingConfigurationFromObject(self, af_resource_id: str, chc: dict) -> bool:
         chcstr = json.dumps(chc)
-        return await self.addContentHostingConfigurationFromJsonString(provisioning_session_id, chcstr)
+        return await self.addContentHostingConfigurationFromJsonString(af_resource_id, chcstr)
 
-    async def addContentHostingConfigurationFromJsonString(self, provisioning_session_id: str, chc: str) -> bool:
-        result = await self.__do_request('POST', '/content-hosting-configurations/'+provisioning_session_id, chc, 'application/json')
+    async def addContentHostingConfigurationFromJsonString(self, af_resource_id: str, chc: str) -> bool:
+        result = await self.__do_request('POST', '/content-hosting-configurations/'+af_resource_id, chc, 'application/json')
         if result['status_code'] == 201:
             self.__log.debug('ContentHostingConfiguration added successfully as %s'%result['headers']['Location'])
             return True
-        elif result['status_code'] == 405:
+        elif result['status_code'] == 409:
             raise M3ClientException('ContentHostingConfiguration already exists!', status_code=result['status_code'])
+        elif result['status_code'] == 410:
+            raise M3ClientException('ContentHostingConfiguration was destroyed earlier and its identifier cannot be reused!', status_code=result['status_code'])
         elif result['status_code'] == 413:
             raise M3ClientException('ContentHostingConfiguration data too big for server!', status_code=result['status_code'])
         elif result['status_code'] == 414:
-            raise M3ClientException('URI too long for server, try shorter provisioning session id.', status_code=result['status_code'])
+            raise M3ClientException('URI too long for server, try shorter afResourceId.', status_code=result['status_code'])
         elif result['status_code'] == 415:
             raise M3ClientException('Unsupported media-type', status_code=result['status_code'])
         elif result['status_code'] == 500:
@@ -324,17 +337,17 @@ class M3Client(object):
             else:
                 raise M3ServerException(msg, status_code=result['status_code'], problem_detail=pd)
 
-    async def updateContentHostingConfigurationFromJsonFile(self, provisioning_session_id: str, chc_file: str) -> bool:
-        async with aiofiles.open(chc_file, mode='rb') as chc_in:
+    async def updateContentHostingConfigurationFromJsonFile(self, af_resource_id: str, chc_filename: str) -> bool:
+        async with aiofiles.open(chc_filename, mode='rb') as chc_in:
             chc = await chc_in.read()
-        return await self.updateContentHostingConfigurationFromJsonString(provisioning_session_id, chc)
+        return await self.updateContentHostingConfigurationFromJsonString(af_resource_id, chc)
 
-    async def updateContentHostingConfigurationFromObject(self, provisioning_session_id: str, chc: dict) -> bool:
+    async def updateContentHostingConfigurationFromObject(self, af_resource_id: str, chc: dict) -> bool:
         chcstr = json.dumps(chc)
-        return await self.updateContentHostingConfigurationFromJsonString(provisioning_session_id, chcstr)
+        return await self.updateContentHostingConfigurationFromJsonString(af_resource_id, chcstr)
 
-    async def updateContentHostingConfigurationFromJsonString(self, provisioning_session_id: str, chc: str) -> bool:
-        result = await self.__do_request('PUT', '/content-hosting-configurations/'+provisioning_session_id, chc, 'application/json')
+    async def updateContentHostingConfigurationFromJsonString(self, af_resource_id: str, chc: str) -> bool:
+        result = await self.__do_request('PUT', '/content-hosting-configurations/'+af_resource_id, chc, 'application/json')
         if result['status_code'] == 200:
             self.__log.debug('ContentHostingConfiguration updated')
             return True
@@ -343,10 +356,12 @@ class M3Client(object):
             return False
         elif result['status_code'] == 404:
             raise M3ClientException('ContentHostingConfiguration not found!', status_code=result['status_code'])
+        elif result['status_code'] == 410:
+            raise M3ClientException('ContentHostingConfiguration was destroyed earlier and its identifier cannot be reused!', status_code=result['status_code'])
         elif result['status_code'] == 413:
             raise M3ClientException('ContentHostingConfiguration data too big for server!', status_code=result['status_code'])
         elif result['status_code'] == 414:
-            raise M3ClientException('URI too long for server, try shorter provisioning session id.', status_code=result['status_code'])
+            raise M3ClientException('URI too long for server, try shorter afResourceId.', status_code=result['status_code'])
         elif result['status_code'] == 415:
             raise M3ClientException('Unsupported media-type', status_code=result['status_code'])
         elif result['status_code'] == 500:
@@ -363,15 +378,17 @@ class M3Client(object):
             else:
                 raise M3ServerException(msg, status_code=result['status_code'], problem_detail=pd)
 
-    async def deleteContentHostingConfiguration(self, provisioning_session_id: str) -> bool:
-        result = await self.__do_request('DELETE', '/content-hosting-configurations/'+provisioning_session_id, None, 'application/json')
+    async def deleteContentHostingConfiguration(self, af_resource_id: str) -> bool:
+        result = await self.__do_request('DELETE', '/content-hosting-configurations/'+af_resource_id, None, 'application/json')
         if result['status_code'] == 204:
-            self.__log.debug('ContentHostingConfiguration for %s deleted', provisioning_session_id)
+            self.__log.debug('ContentHostingConfiguration %s deleted', af_resource_id)
             return True
         elif result['status_code'] == 404:
             raise M3ClientException('ContentHostingConfiguration not found!', status_code=result['status_code'])
+        elif result['status_code'] == 410:
+            raise M3ClientException('ContentHostingConfiguration was destroyed earlier and its identifier cannot be reused!', status_code=result['status_code'])
         elif result['status_code'] == 414:
-            raise M3ClientException('URI too long for server, try shorter provisioning session id.', status_code=result['status_code'])
+            raise M3ClientException('URI too long for server, try shorter afResourceId.', status_code=result['status_code'])
         elif result['status_code'] == 415:
             raise M3ClientException('Unsupported media-type', status_code=result['status_code'])
         elif result['status_code'] == 500:
@@ -406,24 +423,24 @@ class M3Client(object):
             else:
                 raise M3ServerException(msg, status_code=result['status_code'], problem_detail=pd)
 
-    async def purgeContentHostingCache(self, provisioning_session_id: str, pattern: Optional[str] = None) -> int:
-        body = None
-        if pattern is not None:
-            body = bytes('pattern=%s'%pattern, 'utf-8')
-        result = await self.__do_request('POST', '/content-hosting-configurations/'+provisioning_session_id+'/purge', body, 'application/x-www-form-urlencoded')
+    async def purgeContentHostingCache(self, af_resource_id: str, pattern: str) -> int:
+        body = urllib.parse.urlencode({'pattern': pattern}).encode('utf-8')
+        result = await self.__do_request('POST', '/content-hosting-configurations/'+af_resource_id+'/purge', body, 'application/x-www-form-urlencoded')
         if result['status_code'] == 200:
             return int(result['body'])
         elif result['status_code'] == 204:
             return 0
         elif result['status_code'] == 404:
             raise M3ClientException('ContentHostingConfiguration not found!', status_code=result['status_code'])
+        elif result['status_code'] == 410:
+            raise M3ClientException('ContentHostingConfiguration was destroyed earlier and its identifier cannot be reused!', status_code=result['status_code'])
         elif result['status_code'] == 413:
-            raise M3ClientException('Payload too large for server, try shorter pattern.', status_code=result['status_code'])
+            raise M3ClientException('Payload too large for server, try a shorter pattern.', status_code=result['status_code'])
         elif result['status_code'] == 414:
-            raise M3ClientException('URI too long for server, try shorter provisioning session id.', status_code=result['status_code'])
+            raise M3ClientException('URI too long for server, try shorter afResourceId.', status_code=result['status_code'])
         elif result['status_code'] == 415:
             raise M3ClientException('Unsupported media-type', status_code=result['status_code'])
-        elif result['status_code'] == 422:
+        elif result['status_code'] in (400, 422):
             pd: Optional[ProblemDetail] = None
             if result['headers']['content-type'] == 'application/problem+json':
                 pd = ProblemDetail.fromJSON(result['body'])
