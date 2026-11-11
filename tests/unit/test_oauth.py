@@ -92,6 +92,15 @@ class OAuthTest(unittest.TestCase):
         self.assertEqual(authz.token_endpoint('POST', FORM, b'grant_type=client_credentials&scope=x',
                                               basic('small', 't')).status_code, 400)
 
+    def test_a_non_ascii_bearer_value_or_secret_is_401_and_not_an_error(self):
+        # RFC 6750 clause 3.1 and RFC 6749 clause 5.2: a credential that does not match is refused with 401
+        authz = authorizer()
+        token_of(authz, 'af', 's')
+        self.assertEqual(authz.check('GET', '/3gpp-mas-configuration/v1/certificates', 'Bearer t\u00e9st').status_code, 401)
+        self.assertEqual(authz.token_endpoint('POST', FORM, b'grant_type=client_credentials', basic('af', 's\u00e9')).status_code, 401)
+        form = 'grant_type=client_credentials&client_id=af&client_secret=%C3%A9'.encode()
+        self.assertEqual(authz.token_endpoint('POST', FORM, form, None).status_code, 401)
+
 
 if __name__ == '__main__':
     unittest.main()

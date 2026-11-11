@@ -39,6 +39,11 @@ def _compile(path: str) -> 're.Pattern':
 _OPERATIONS: List[Tuple[str, 're.Pattern', Optional[str]]] = [(m, _compile(p), s) for m, p, s in OPERATION_SCOPES]
 
 
+def _same(a: str, b: str) -> bool:
+    '''Constant-time comparison of two strings; secrets.compare_digest raises TypeError for str with non-ASCII characters, which would be a 500 instead of 401'''
+    return secrets.compare_digest(a.encode('utf-8', 'surrogatepass'), b.encode('utf-8', 'surrogatepass'))
+
+
 class Authorizer:
     '''The authorization server and the check of the resource server'''
 
@@ -89,7 +94,7 @@ class Authorizer:
         token = None
         presented = authorization[7:].strip()
         for value, entry in self.__tokens.items():
-            if secrets.compare_digest(value, presented):
+            if _same(value, presented):
                 token = entry
         if token is None:
             return self.__problem(401, 'Unauthorized', 'The access token is invalid or has expired', _REALM + ', error="invalid_token"')
@@ -131,7 +136,7 @@ class Authorizer:
             client_id, secret = form.get('client_id'), form.get('client_secret')
         clients = self.__clients()
         known = clients.get(client_id or '')
-        if known is None or secret is None or not secrets.compare_digest(known[0], secret):
+        if known is None or secret is None or not _same(known[0], secret):
             return self.__token_error(401, 'invalid_client', 'Client authentication failed', 'Basic realm="5GMS AS"')
 
         allowed = known[1]

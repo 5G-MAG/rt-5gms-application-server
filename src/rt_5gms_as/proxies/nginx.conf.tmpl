@@ -41,12 +41,14 @@ http {{
   {proxy_cache_path_directive}
   proxy_cache_valid 200 1d;
   proxy_cache_valid any 1m;
+{status_maps}
   proxy_buffering on;
   fastcgi_temp_path {fastcgi_temp_path};
   uwsgi_temp_path {uwsgi_temp_path};
   scgi_temp_path {scgi_temp_path};
   lua_package_path "{scriptdir}/?.lua;;";
   lua_shared_dict dynredirmap 10m;
+  lua_shared_dict m4d_ingest 10m;
   lua_shared_dict cmcd_cfg 1m;
   resolver {resolvers};
   proxy_ssl_server_name on;
@@ -65,6 +67,8 @@ http {{
   
     dynredir = require "dynamicredirect"
     m4daccess = require "m4daccess"
+    m3d_cmcd = require "cmcd_samples"
+    m3d_cmcd.configure("{m3d_samples_socket}")
 	
     local dict = ngx.shared.cmcd_cfg
     if dict then

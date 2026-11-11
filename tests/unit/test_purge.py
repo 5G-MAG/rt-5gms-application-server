@@ -1,10 +1,11 @@
 # Unit tests of the purge of the cache of the 5GMS Application Server.
 # License: 5G-MAG Public License (v1.0)
 import asyncio
+import re
 import unittest
 
 from rt_5gms_as.proxy_factory import WebProxyInterface, WebProxyRegexTimeout
-from rt_5gms_as.proxies.openresty import OpenRestyWebProxy
+from rt_5gms_as.proxies.openresty import OpenRestyLocationConfig, OpenRestyWebProxy
 
 class Context(object):
     def __init__(self, timeout):
@@ -32,6 +33,14 @@ class PurgeUsingRegex(unittest.TestCase):
         self.assertEqual(asyncio.run(proxy.purgeUsingRegex('s1', '/a/.*')), 1)
         self.assertEqual(proxy.purged, [('s1', '/a/seg1.m4s')])
 
+    def test_pattern_is_searched_in_the_request_path_of_the_m4d_client(self):
+        # TS 26.512 V19.3.0 clause 4.5.4.9: "a regular expression [5] identifying the media resource URL(s)"; ECMA-262 patterns are searched, not
+        # anchored at the start, like urlPatternFilter and urlPattern
+        entries = [('s1', '/m4d/ps/dist/seg1.m4s'), ('s1', '/m4d/ps/dist/seg2.m4s'), ('s1', '/m4d/ps/dist/manifest.mpd')]
+        for pattern, count in ((r'\.m4s$', 2), ('seg1', 1), ('/dist/seg1.m4s', 1), ('^/m4d/ps/dist/seg', 2), ('^/dist/', 0), ('.*', 3), ('nothing', 0)):
+            with self.subTest(pattern=pattern):
+                self.assertEqual(asyncio.run(Proxy('1.0', entries).purgeUsingRegex('s1', pattern)), count)
+
     def test_pattern_that_takes_too_long_is_refused(self):
         # a bound with a source: the option purge_regex_timeout of the section 5gms_as
         proxy = Proxy('0.3', [('s1', 'a' * 60 + 'b')])
@@ -43,6 +52,36 @@ class PurgeUsingRegex(unittest.TestCase):
         with self.assertRaises(regex.error):
             asyncio.run(Proxy('1.0', []).purgeUsingRegex('s1', '('))
 
+class FakeContext(object):
+    def getConfigVar(self, section, name, default=None):
+        return default
+    def appLog(self):
+        import logging
+        return logging.getLogger('test')
+
+class CacheKeyConfiguration(unittest.TestCase):
+    def test_key_holds_the_path_as_requested_before_any_rewrite(self):
+        locn = OpenRestyLocationConfig(FakeContext(), '/m4d/ps/', 'http://origin.example.com/media/', 'ps')
+        self.assertTrue(locn.addRewriteRule('^/old/', '/new/'))
+        text = asyncio.run(locn.config(0))
+        self.assertIn('proxy_cache_key "$m4d_key_prefix:u=$m4d_path";', text)
+        self.assertNotIn('$uri";', text)
+        # the variable is set before the first rewrite rule changes $uri
+        self.assertLess(text.index('set $m4d_path $uri;'), text.index('rewrite "'))
+
+    def test_key_prefix_changes_with_the_rewrite_rules_and_names_the_session_after_the_bar(self):
+        def prefix(rules):
+            locn = OpenRestyLocationConfig(FakeContext(), '/m4d/ps/', 'http://origin.example.com/media/', 'ps')
+            for (a, b) in rules:
+                self.assertTrue(locn.addRewriteRule(a, b))
+            text = asyncio.run(locn.config(0))
+            return re.search(r'set \$m4d_key_prefix "([^"]+)";', text).group(1)
+        none, one, two = prefix([]), prefix([('^/a/$', '/b/')]), prefix([('^/a/$', '/c/')])
+        self.assertEqual(len({none, one, two}), 3)
+        for p in (none, one, two):
+            self.assertTrue(p.endswith('|ps'))
+        self.assertEqual(prefix([('^/a/$', '/b/')]), one)
+
 class CacheKey(unittest.TestCase):
     def setUp(self):
         self.proxy = object.__new__(OpenRestyWebProxy)
@@ -50,6 +89,7 @@ class CacheKey(unittest.TestCase):
     def test_url_path_may_contain_the_separator(self):
         convert = self.proxy._OpenRestyWebProxy__key_to_prov_sess_and_url_path
         self.assertEqual(convert('s1:u=/path/seg.m4s'), ('s1', '/path/seg.m4s'))
+        self.assertEqual(convert('0a1b2c3d|s1:u=/path/seg.m4s'), ('s1', '/path/seg.m4s'))
         self.assertEqual(convert('s1:u=/path:u=/x'), ('s1', '/path:u=/x'))
 
     def test_key_without_a_session_is_rejected(self):

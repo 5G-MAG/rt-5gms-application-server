@@ -48,14 +48,39 @@ from .utils import async_create_task
 from .exceptions import ProblemException, NoProblemException
 from .openapi_5g.apis.default_api import router as m3_router
 from .oauth import Authorizer
+from . import m3d
+
+# longest request URI (path and query) that the M3 server processes for an operation whose OpenAPI response table lists 414; a longer one is answered with 414
+M3_MAX_URI_LENGTH = 8192
+
+# the path prefix of the M3 API and the order in which the OpenAPI files list the methods of a path
+M3_PATH_PREFIX = '/3gpp-mas-configuration/v1'
+_M3_METHOD_ORDER = ('GET', 'POST', 'PUT', 'PATCH', 'DELETE')
+# the enumerate operations (GET of a collection) are the only ones of the M3 OpenAPI files whose response table does not list 414
+_M3_COLLECTIONS = tuple(M3_PATH_PREFIX + name for name in ('/certificates', '/content-preparation-templates', '/content-hosting-configurations', '/content-publishing-configurations'))
+
+def lists_uri_too_long(path):
+    '''Whether the response table of the M3 operation at path lists 414 (URI Too Long): every operation of the M3 API except the enumerate operations'''
+    return path.startswith(M3_PATH_PREFIX + '/') and path.rstrip('/') not in _M3_COLLECTIONS
+
+def allowed_methods(router, path, prefix=M3_PATH_PREFIX):
+    '''The methods that the OpenAPI files define for a path of the M3 API: the union of the methods of every route of the router that matches it.
+
+    There is one route per method, and the framework's own 405 lists the methods of the first route that matches the path only. HEAD and
+    OPTIONS are not among them: no OpenAPI file of the M3 API defines them, so they are answered 405 like any other method that is not defined.
+    '''
+    relative = path[len(prefix):] if path.startswith(prefix) else path
+    methods = set()
+    for route in router.routes:
+        if route.path_regex.match(relative):
+            methods |= route.methods
+    return [m for m in _M3_METHOD_ORDER if m in methods] + sorted(methods.difference(_M3_METHOD_ORDER))
 
 __pkg_version = 'Devel'
 try:
     __pkg_version = importlib.metadata.version('rt-5gms-application-server')
 except importlib.metadata.PackageNotFoundError:
     pass
-
-_app_server_hdr = '5GMSd-AS/'+__pkg_version
 
 def get_arg_parser():
     '''
@@ -123,7 +148,6 @@ def exit_handler(sig, context):
 class AppJSONResponse(JSONResponse):
     def __init__(self, *args, status_code=200, **kwargs):
         super().__init__(*args, status_code=status_code, **kwargs)
-        self.headers['Server'] = _app_server_hdr
 
 async def __app(context):
     '''Asynchronous app entry point
@@ -144,6 +168,15 @@ async def __app(context):
     loop.add_signal_handler(signal.SIGINT, exit_handler, signal.SIGINT, context)
     loop.add_signal_handler(signal.SIGQUIT, exit_handler, signal.SIGQUIT, context)
 
+    # TS 26.512 V19.3.0 clause 4.6.0.1: say whether this AS supports ECN marking for L4S at M4d (the AF reads the equivalent mediaAsSupportsL4s)
+    context.appLog().info("L4S (RFC 9330, 9331 and 9332) at reference point M4d: %s", "declared as supported (supports_l4s)" if context.supportsL4s() else "not supported")
+
+    # Reference point M3d: Service Access Information and CMCD reports for the 5GMSd AF, when the section 5gms_as.m3d names its address
+    reporter = m3d.from_context(context)
+    if reporter is not None:
+        await reporter.start(m3d.samples_socket_path(context), int(context.getConfigVar('5gms_as.m3d', 'samples_socket_mode', '666'), 8))
+        context.appLog().info("Reporting to the 5GMSd AF at %s (reference point M3d)", context.getConfigVar('5gms_as.m3d', 'af_url'))
+
     # Write out the web proxy configuration
     if not await context.webProxy().writeConfiguration():
         context.appLog().error("Unable to write out configurations for %s web proxy", context.webProxy().name())
@@ -159,7 +192,8 @@ async def __app(context):
 
     server.setContext(context)
 
-    m3_app = FastAPI(title='5G-MAG M3', description='5GMS AS M3 API Copyright © 2022 British Broadcasting Corporation All rights reserved.', version='0.0.0', debug=False, default_response_class=AppJSONResponse)
+    m3_app = FastAPI(title='5G-MAG M3', description='5GMS AS M3 API Copyright © 2022 British Broadcasting Corporation All rights reserved.', version='0.0.0', debug=False, default_response_class=AppJSONResponse,
+                     docs_url=None, redoc_url=None, openapi_url=None)
     m3_app.debug = False
 
     @m3_app.exception_handler(ProblemException)
@@ -168,18 +202,24 @@ async def __app(context):
 
     @m3_app.exception_handler(NoProblemException)
     async def no_problem_exception_handler(request, exc):
-        hdrs = exc.headers
-        if hdrs is None:
-            hdrs = {}
-        hdrs['server'] = _app_server_hdr
-        return Response(exc.body, status_code=exc.status_code, headers=hdrs, media_type=exc.media_type)
+        return Response(exc.body, status_code=exc.status_code, headers=exc.headers, media_type=exc.media_type)
 
     @m3_app.exception_handler(RequestValidationError)
     async def request_validation_exception_handler(request, exc):
         path = request.url.path
-        # a resource this AS does not implement is answered 501 whatever the body is
-        if request.method in ('POST', 'PUT') and ('/content-preparation-templates/' in path or '/content-publishing-configurations/' in path):
-            return AppJSONResponse(status_code=501, content=ProblemException(status_code=501, title='Not Implemented', detail='This resource is not implemented by this 5GMS AS', instance=path).object, media_type='application/problem+json')
+        # a Content Preparation Template is of any media type: the framework cannot parse it as the declared string, so the handler is called here with the raw body
+        if request.method in ('POST', 'PUT') and path.split('/')[-2:-1] == ['content-preparation-templates']:
+            handler = server.create_content_preparation_template if request.method == 'POST' else server.replace_content_preparation_template
+            try:
+                await handler(path.split('/')[-1], None, request=request)
+            except ProblemException as problem:
+                return await problem_exception_handler(request, problem)
+            except NoProblemException as done:
+                return await no_problem_exception_handler(request, done)
+        # a PUT or POST to a resource that is not there is answered with 410 or 404 before the body is judged (clauses 4.5.2.5, 4.5.4.5, 4.5.4.7, 4.5.4.9)
+        missing = server.missing_resource_problem(request)
+        if missing is not None:
+            return await problem_exception_handler(request, missing)
         # TS 29.500 clause 5.2.7.2: unsupported content format is rejected with 415
         expected = None
         if path.split('/')[-2:-1] == ['certificates']:
@@ -200,8 +240,18 @@ async def __app(context):
     @m3_app.exception_handler(StarletteHTTPException)
     async def http_exception_handler(request, exc):
         # errors raised by the framework itself (unknown resource 404, method not allowed 405) are also ProblemDetails (clause 7.1.7 of TS 26.510)
+        segments = request.url.path.split('/')
+        if exc.status_code == 404 and len(segments) > 2 and segments[1] == '3gpp-mas-configuration' and segments[2] != 'v1':
+            # TS 29.500 table 5.2.7.2-1: a URI with an unsupported API version is rejected with 400 and the cause INVALID_API
+            problem = ProblemException(status_code=400, title='Bad Request', detail='API version [%s] is not supported' % segments[2], instance=request.url.path)
+            problem.object['cause'] = 'INVALID_API'
+            return AppJSONResponse(status_code=400, content=problem.object, media_type='application/problem+json')
         problem = ProblemException(status_code=exc.status_code, title=str(exc.detail), instance=request.url.path)
-        return AppJSONResponse(status_code=exc.status_code, content=problem.object, headers=getattr(exc, 'headers', None), media_type='application/problem+json')
+        headers = getattr(exc, 'headers', None)
+        if exc.status_code == 405:
+            # RFC 9110 clause 15.5.6: the Allow header field lists the methods that the OpenAPI files define for the path
+            headers = dict(headers or {}, Allow=', '.join(allowed_methods(m3_router, request.url.path)))
+        return AppJSONResponse(status_code=exc.status_code, content=problem.object, headers=headers, media_type='application/problem+json')
 
     # OAuth 2.0 at M3 (TS 26.512 clause 6.6.3): the token endpoint and the check of the access token, if [5gms_as.oauth] is configured
     authorizer = Authorizer(context)
@@ -209,6 +259,10 @@ async def __app(context):
     @m3_app.middleware('http')
     async def oauth_middleware(request, call_next):
         path = request.url.path
+        # the YAML tables list 414 (URI Too Long) for every operation but the enumerate operations; the server library would answer 431 for a very long request line
+        if lists_uri_too_long(path) and len(request.scope.get('raw_path') or b'') + len(request.scope.get('query_string') or b'') > M3_MAX_URI_LENGTH:
+            return AppJSONResponse(status_code=414, content=ProblemException(status_code=414, title='URI Too Long', detail='The request URI is longer than %d bytes' % M3_MAX_URI_LENGTH,
+                                                                             instance=path[:200]).object, media_type='application/problem+json')
         if path == '/oauth2/token':
             response = authorizer.token_endpoint(request.method, request.headers.get('content-type'), await request.body(),
                                                  request.headers.get('authorization'))
@@ -217,16 +271,18 @@ async def __app(context):
         else:
             response = None
         if response is None:
+            if request.method == 'POST' and path.endswith('/purge'):
+                # the form parser of the framework is lenient (a bad percent-escape is kept as it is): the handler checks the body itself
+                request.state.raw_body = await request.body()
             return await call_next(request)
-        response.headers['Server'] = _app_server_hdr
         return response
 
     # TODO: Create HTTP server to handle M2 interface and add task to main loop
 
     # Create HTTP server to handle M3 interface and add task to main loop
-    m3_app.include_router(m3_router, prefix="/3gpp-mas-configuration/v1")
+    m3_app.include_router(m3_router, prefix=M3_PATH_PREFIX)
 
-    m3_config = hypercorn.Config.from_mapping(include_server_header=False, bind=context.getConfigVar('5gms_as','m3_listen')+':'+context.getConfigVar('5gms_as','m3_port'), loglevel='DEBUG', accesslog='-', errorlog='-')
+    m3_config = hypercorn.Config.from_mapping(include_server_header=False, h11_max_incomplete_size=4 * 1024 * 1024, bind=context.getConfigVar('5gms_as','m3_listen')+':'+context.getConfigVar('5gms_as','m3_port'), loglevel='DEBUG', accesslog='-', errorlog='-')
     m3_serve_task = async_create_task(hypercorn.asyncio.serve(m3_app, m3_config), name='M3-server')
 
     # Main application loop
@@ -270,6 +326,9 @@ async def __app(context):
             await m3_serve_task
         except asyncio.exceptions.CancelledError:
             pass
+
+    if reporter is not None:
+        await reporter.stop()
 
     # Stop the web proxy daemon if it's running
     if not await context.webProxy().stopDaemon():

@@ -27,6 +27,7 @@ import aiofiles
 import asyncio
 import json
 import datetime
+import hashlib
 import importlib.resources
 import logging
 import os
@@ -43,13 +44,19 @@ from urllib.parse import urlparse
 from ..proxy_factory import WebProxyInterface, add_web_proxy
 from ..utils import find_executable_on_path, traverse_directory_tree
 from ..context import Context
+from .. import m3d
 
 class OpenRestyLocationConfig(object):
     '''
     Class to hold and compare location configurations
     '''
-    def __init__(self, context: Context, path_prefix: str, downstream_prefix_url: str, provisioning_session: str):
+    def __init__(self, context: Context, path_prefix: str, downstream_prefix_url: str, provisioning_session: str, downstream_query: str = ''):
         self.__context: Context = context
+        if not Context.isProxySafeQuery(downstream_query):
+            raise ValueError('The query of the ingest baseURL cannot be written into the web proxy configuration')
+        # the query of the ingest baseURL (without the '?'): TS 26.512 V19.3.0 clause 8.2 replaces the prefix of the request URL with the
+        # baseURL, so this is not a RFC 3986 clause 5.2 reference resolution (that would drop the last path segment and the base query)
+        self.downstream_query: str = downstream_query
         self.path_prefix: str = path_prefix
         self.downstream_prefix_url: str = downstream_prefix_url
         self.provisioning_session: str = provisioning_session
@@ -116,7 +123,7 @@ class OpenRestyLocationConfig(object):
             return False
         if self.provisioning_session != other.provisioning_session:
             return False
-        if self.downstream_prefix_url != other.downstream_prefix_url:
+        if self.downstream_prefix_url != other.downstream_prefix_url or self.downstream_query != other.downstream_query:
             return False
         if len(self.rewrite_rules) != len(other.rewrite_rules):
             return False
@@ -138,20 +145,64 @@ class OpenRestyLocationConfig(object):
         assert ']==]' not in text
         return '[==[' + text + ']==]'
 
+    @staticmethod
+    def __status_map(kind: str, source: str, codes: List[int], value: str, default: str) -> Tuple[str, str]:
+        '''A map (http context) of the status codes of a caching rule to a value: returns the variable name and the map block'''
+        key = '|'.join([kind, source, ','.join(str(int(c)) for c in codes), value, default])
+        name = 'm4d_' + kind + '_' + hashlib.sha1(key.encode('utf-8')).hexdigest()[:12]
+        block = f'  map ${source} ${name} {{\n    default "{default}";\n'
+        block += ''.join(f'    {int(c)} "{value}";\n' for c in codes)
+        return (name, block + '  }\n')
+
+    def __rule_maps(self, rule: Dict[str, Any]) -> Dict[str, Tuple[str, str]]:
+        '''The maps that restrict the no-cache directive and the Cache-Control header of a caching rule to its status code filter
+
+        The status code filter of TS 26.510 table 8.8.3.1-1 limits the cachingDirectives to the origin response status codes
+        listed; if it is absent they apply to all of them (no map is needed).
+        '''
+        maps: Dict[str, Tuple[str, str]] = {}
+        codes = rule['statusCodes']
+        if not codes:
+            return maps
+        if rule['noCache']:
+            maps['nc'] = self.__status_map('nc', 'upstream_status', codes, '1', '0')
+            maps['cc'] = self.__status_map('cc', 'status', codes, 'no-cache, no-store, max-age=0', '')
+        return maps
+
+    def status_maps(self) -> Dict[str, str]:
+        '''The map blocks (for the http context of the configuration file) that the caching rules of the location refer to, by variable name'''
+        maps: Dict[str, str] = {}
+        for rule in self.caching_rules:
+            for (name, block) in self.__rule_maps(rule).values():
+                maps[name] = block
+        return maps
+
+    @staticmethod
+    def caching_rules_signal_ttl(rule: Optional[Dict[str, Any]]) -> bool:
+        '''Whether the responses of a caching rule signal a time-to-live (TS 26.510 table 8.8.3.1-1: noCache false and maxAge present)'''
+        return rule is not None and not rule['noCache'] and rule['maxAge'] is not None
+
     def __cache_directives(self, prefix: str, rule: Optional[Dict[str, Any]]) -> str:
         '''The directives of a caching rule (TS 26.512 V19.3.0 clause 7.6.4.2); a location without a rule keeps what the origin directs'''
         if rule is None:
             return ''
-        codes = ' '.join(str(c) for c in rule['statusCodes']) if rule['statusCodes'] else '200 206 301 302 303 307 308 404'
+        # TS 26.510 table 8.8.3.1-1: without statusCodeFilters the directives apply to all origin response status codes
+        codes = ' '.join(str(int(c)) for c in rule['statusCodes']) if rule['statusCodes'] else 'any'
+        maps = self.__rule_maps(rule)
         ret = f'{prefix}  proxy_ignore_headers Cache-Control Expires X-Accel-Expires Set-Cookie Vary;\n'
         ret += f'{prefix}  proxy_hide_header Cache-Control;\n{prefix}  proxy_hide_header Expires;\n'
         if rule['noCache']:
-            ret += f'{prefix}  proxy_no_cache 1;\n{prefix}  proxy_cache_bypass 1;\n'
-            ret += f'{prefix}  add_header Cache-Control "no-cache, no-store, max-age=0" always;\n'
+            if maps:
+                # only the responses of the status codes in the filter are kept out of the cache and marked
+                ret += f'{prefix}  proxy_no_cache ${maps["nc"][0]};\n'
+                ret += f'{prefix}  add_header Cache-Control ${maps["cc"][0]} always;\n'
+            else:
+                ret += f'{prefix}  proxy_no_cache 1;\n{prefix}  proxy_cache_bypass 1;\n'
+                ret += f'{prefix}  add_header Cache-Control "no-cache, no-store, max-age=0" always;\n'
         else:
             if rule['maxAge'] is not None:
                 ret += f'{prefix}  proxy_cache_valid {codes} {int(rule["maxAge"])}s;\n'
-                ret += f'{prefix}  add_header Cache-Control "max-age={int(rule["maxAge"])}" always;\n'
+                # the time-to-live that the response signals counts from the ingest: the header is set by the Lua block of the location
             else:
                 # no maxAge: cached until the cache is purged or the configuration destroyed
                 ret += f'{prefix}  proxy_cache_valid {codes} 10y;\n'
@@ -159,18 +210,28 @@ class OpenRestyLocationConfig(object):
 
     def __location_body(self, prefix: str, rule: Optional[Dict[str, Any]]) -> str:
         '''The directives of the location, with those of the caching rule if there is one'''
-        ret = f'''{prefix}  set $downstream_prefix_url "{self.downstream_prefix_url}";
+        # the cache key holds the request path as the M4d client sent it, so that the pattern of a purge request (TS 26.512 V19.3.0 clause 4.5.4.9,
+        # TS 26.510 V19.2.0 clause 5.2.8.6: "the media resource URLs") meets what the Application Provider knows, and not the rewritten path
+        # the key starts with a digest of the path rewrite rules: an entry cached under other rules (a 404 for a path that a rule now maps)
+        # is not served after the rules changed; a purge takes the part after the '|' as the provisioning session
+        rules_digest = hashlib.sha1('\n'.join(f'{a}\t{b}' for (a, b) in self.rewrite_rules).encode('utf-8')).hexdigest()[:8]
+        ret = f'''{prefix}  set $m4d_path $uri;
+{prefix}  set $m4d_key_prefix "{rules_digest}|{self.provisioning_session}";
+{prefix}  set $downstream_prefix_url "{self.downstream_prefix_url}";
 {prefix}  set $location_prefix "{self.path_prefix}";
 '''
+        if self.downstream_query:
+            # sent with every request to the origin, unless a redirect of the origin leads elsewhere (the Lua block below)
+            ret += f'{prefix}  set $downstream_base_query "{self.downstream_query}";\n{prefix}  set $downstream_query "";\n'
         for (regex, replace) in self.rewrite_rules:
             ret += f'{prefix}  rewrite "{regex}" "{replace}" break;\n'
-        ret += f'{prefix}  proxy_cache_key "{self.provisioning_session}:u=$uri";\n'
+        ret += f'{prefix}  proxy_cache_key "$m4d_key_prefix:u=$m4d_path";\n'
         if rule is None:
             # a cookie of the origin is not forwarded (clause 7.6.4.2) and does not keep the resource out of the cache
             ret += f'{prefix}  proxy_ignore_headers Set-Cookie;\n'
         ret += self.__cache_directives(prefix, rule)
         # CMCD data is for the collector of the AS and not for the origin (M2d): its request headers are not passed on
-        for hdr in ('CMCD-Request', 'CMCD-Object', 'CMCD-Status', 'CMCD-Session'):
+        for hdr in ('CMCD', 'CMCD-Request', 'CMCD-Object', 'CMCD-Status', 'CMCD-Session'):
             ret += f'{prefix}  proxy_set_header {hdr} "";\n'
         access = self.url_signature is not None or self.geo_fencing is not None or len(self.cors_aliases) > 0
         if access:
@@ -191,19 +252,41 @@ class OpenRestyLocationConfig(object):
         ret += f'''{prefix}  header_filter_by_lua_block {{
 {prefix}    m4daccess.filter_origin_headers()
 '''
+        if self.caching_rules_signal_ttl(rule):
+            codes = ','.join(f'[{int(c)}]=true' for c in rule['statusCodes']) if rule['statusCodes'] else ''
+            ret += f'{prefix}    m4daccess.signal_ttl({int(rule["maxAge"])}, {{{codes}}}, "{self.provisioning_session}")\n'
         if len(self.cors_aliases) > 0:
             ret += f'''{prefix}    local cfg = m4daccess.cfg("{self.provisioning_session}:{self.path_prefix}", {self.__lua_json()})
 {prefix}    m4daccess.cors(cfg.cors)
 '''
+        # with a query in the ingest baseURL: it is appended to the origin URL, except for a location that a redirect of the origin gave
+        origin_prefix = map_query = proxy_query = ''
+        if self.downstream_query:
+            origin_prefix = f'{prefix}    local origin_prefix = ngx.var.downstream_prefix_url\n'
+            map_query = f'''
+{prefix}    if ngx.var.downstream_prefix_url == origin_prefix then
+{prefix}      ngx.var.downstream_query = "?"..ngx.var.downstream_base_query
+{prefix}    end'''
+            proxy_query = '$downstream_query'
+        # TS 26.512 V19.3.0 clause 4.6: a request that cannot be served from the cache is transformed into a GET request to the origin, so only
+        # GET and HEAD reach it (and the CORS preflight of the aliases, which the access phase answers)
+        allowed_methods = ['GET', 'HEAD'] + (['OPTIONS'] if len(self.cors_aliases) > 0 else [])
+        method_test = ' and '.join(f'method ~= "{m}"' for m in allowed_methods)
+        allow_header = ', '.join(allowed_methods)
         ret += f'''{prefix}  }}
 {prefix}  rewrite_by_lua_block {{
+{prefix}    local method = ngx.req.get_method()
+{prefix}    if {method_test} then
+{prefix}      ngx.header["Allow"] = "{allow_header}"
+{prefix}      return ngx.exit(405)
+{prefix}    end
 {prefix}    -- ngx.log(ngx.DEBUG,"rewrite_by_lua_block(",ngx.var.uri,", ",ngx.var.downstream_prefix_url,")")
 {prefix}    local uri = ngx.var.uri
 {prefix}    if uri:sub(1,{len(self.path_prefix)}) == "{self.path_prefix}" then
 {prefix}      uri = uri:sub({len(self.path_prefix)})
 {prefix}    end
 {prefix}    -- ngx.log(ngx.DEBUG,"rewrite_by_lua_block: uri = ", uri)
-{prefix}    ngx.var.downstream_prefix_url,ngx.ctx.uri = dynredir.mapUrl("{self.path_prefix}", ngx.var.downstream_prefix_url, uri)
+{origin_prefix}{prefix}    ngx.var.downstream_prefix_url,ngx.ctx.uri = dynredir.mapUrl("{self.path_prefix}", ngx.var.downstream_prefix_url, uri){map_query}
 {prefix}    ngx.req.set_uri(uri)
 {prefix}    ngx.var.downstream_prefix_url = ngx.var.downstream_prefix_url..ngx.ctx.uri:sub(2)
 {prefix}    -- ngx.log(ngx.DEBUG,"rewrite_by_lua_block: proxy=", ngx.var.downstream_prefix_url,", uri=",uri)
@@ -223,7 +306,11 @@ class OpenRestyLocationConfig(object):
 {prefix}      ngx.var.args = ngx.re.gsub(args, "(^|&)CMCD=[^&]*", "", "jo")
 {prefix}    end
 {prefix}  }}
-{prefix}  proxy_pass $downstream_prefix_url;
+{prefix}  log_by_lua_block {{
+{prefix}    -- the CMCD information of the request goes to the reporter of the AS (reference point M3d), if M3d is configured
+{prefix}    if m3d_cmcd then m3d_cmcd.forward("{self.provisioning_session}") end
+{prefix}  }}
+{prefix}  proxy_pass $downstream_prefix_url{proxy_query};
 {prefix}  proxy_intercept_errors on;
 {prefix}  error_page 301 302 303 307 308 = @handle_redirect;
 '''
@@ -278,8 +365,13 @@ class OpenRestyLocationConfig(object):
         # pathRewriteRule only deals with replacing a path part, so we need to
         # include the rest of the URL path in the nginx rewrite rule.
         if rule_regex[0] != '^':
-            rule_regex = '^(.*)' + rule_regex
-            replace = '${1}' + replace
+            # a lazy group, so that the match starts where the pattern first matches and the matched portion (which a leading '.*' of
+            # the pattern may stretch over the whole path) is what mappedPath replaces; nginx reads '${1}' as the variable "1", so the
+            # group is named and written as a variable, which also keeps a digit at the start of mappedPath from joining the reference
+            # (TS 26.512 V19.3.0 clause 7.6.4.2: the rules apply to the path segments after the baseURL, so the head starts with the service
+            # location and the pattern cannot match inside it)
+            rule_regex = '^(?<m4d_path_head>' + regex.escape(self.path_prefix[:-1]) + '.*?)' + rule_regex
+            replace = '${m4d_path_head}' + replace
             brackets += 1
         if rule_regex[-1] != '$':
             rule_regex = rule_regex + '([^?#]*/)?'
@@ -504,11 +596,16 @@ class OpenRestyWebProxy(WebProxyInterface):
         cmcd_collector_url = self._context.getConfigVar('5gms_as', 'cmcd_collector_url', '')
         cmcd_timeout_ms = self._context.getConfigVar('5gms_as', 'cmcd_timeout_ms', '')
         cmcd_lua_dir = self._context.getConfigVar('5gms_as', 'cmcd_lua_dir', '')
+        # the Unix socket on which the CMCD information of M4d requests is handed to the reporter of the AS (reference point M3d); empty: off
+        m3d_samples_socket = m3d.samples_socket_path(self._context)
 
         # Create caching directives if we have a cache dir configured
         proxy_cache_path_directive = ''
         if proxy_cache_path is not None and len(proxy_cache_path) > 0:
-            proxy_cache_path_directive = 'proxy_cache_path %s levels=1:2 use_temp_path=on keys_zone=cacheone:10m;'%proxy_cache_path
+            # nginx removes an entry that was not used for 10 minutes unless told otherwise, which would cut short the minimum caching period
+            # of the caching configuration (TS 26.510 V19.2.0 clause 8.8.3.1, maxAge): the idle limit is configurable and long by default
+            cache_inactive = self._context.getConfigVar('5gms_as', 'cache_inactive', '30d')
+            proxy_cache_path_directive = 'proxy_cache_path %s levels=1:2 use_temp_path=on keys_zone=cacheone:10m inactive=%s;'%(proxy_cache_path, cache_inactive)
 
         # Create the server configurations from the CHCs
         server_configs: Dict[Tuple[str,Optional[str]], OpenRestyServerConfig] = {}
@@ -526,6 +623,8 @@ class OpenRestyWebProxy(WebProxyInterface):
                 return False
             if not isinstance(downstream_origin, str):
                 downstream_origin = str(downstream_origin)
+            # an AbsoluteUrl may have a query (TS 26.510 clause 8.8.3.1): it is kept apart from the path prefix of the origin URL
+            downstream_origin, _, downstream_query = downstream_origin.partition('?')
             if downstream_origin[-1] == '/':
                 downstream_origin = downstream_origin[:-1]
             for dc in i.distribution_configurations:
@@ -545,7 +644,7 @@ class OpenRestyWebProxy(WebProxyInterface):
                     m4d_path_prefix = '/' + m4d_path_prefix
                 if m4d_path_prefix[-1] != '/':
                     m4d_path_prefix += '/'
-                locn = OpenRestyLocationConfig(self._context, m4d_path_prefix, downstream_origin, provisioning_session_id)
+                locn = OpenRestyLocationConfig(self._context, m4d_path_prefix, downstream_origin, provisioning_session_id, downstream_query)
                 if dc.path_rewrite_rules is not None:
                     for rr in dc.path_rewrite_rules:
                         if not locn.addRewriteRule(rr.request_path_pattern, rr.mapped_path):
@@ -575,10 +674,14 @@ class OpenRestyWebProxy(WebProxyInterface):
                         del server_configs[keys[j]]
                         break
         config = ''
+        status_maps_by_name: Dict[str, str] = {}
         for svr in server_configs.values():
             config += await svr.config(2)
             config += '\n'
+            for locn in svr.locations.values():
+                status_maps_by_name.update(locn.status_maps())
         server_configs = config
+        status_maps = ''.join(status_maps_by_name[name] for name in sorted(status_maps_by_name))
         try:
             # Try to write out the configuration file using nginx.conf.tmpl as
             # a template for the configuration file.
@@ -668,13 +771,18 @@ class OpenRestyWebProxy(WebProxyInterface):
         '''Reload nginx and wait until all the worker processes of the old configuration have been replaced
 
         Returns True when the new configuration is in use for new connections, None if the reload failed and False
-        if the workers had not been replaced after _timeout_ seconds (the reload is still in progress).
+        if the workers had not been replaced after _timeout_ seconds (the reload is still in progress, or nginx kept the
+        old configuration because it could not use the new one) or if the workers cannot be observed. The M3 operations
+        report success only for True. With no nginx process running nothing is in use: the configuration is written
+        when nginx is started, so that is True.
         '''
         master = self.daemonPid()
-        before = self.__workerPids(master) if master is not None else None
+        if master is None:
+            return True
+        before = self.__workerPids(master)
         if not await self.reload():
             return None
-        if master is None or before is None:
+        if before is None:
             return False
         loop = asyncio.get_running_loop()
         deadline = loop.time() + timeout
@@ -731,7 +839,7 @@ class OpenRestyWebProxy(WebProxyInterface):
         parts = key.split(':u=', 1)
         if len(parts) != 2:
             raise ValueError('cache key without a provisioning session: %r' % key)
-        return tuple(parts)
+        return (parts[0].split('|', 1)[-1], parts[1])
 
     @classmethod
     def __ensure_modules(cls, cmd):

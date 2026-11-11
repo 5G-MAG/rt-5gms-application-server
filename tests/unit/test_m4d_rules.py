@@ -34,13 +34,56 @@ class CachingRules(unittest.TestCase):
         second = text.index('location ~ "^/m4d/ps\\-1/seg.*"')
         self.assertLess(first, second)
         self.assertIn('proxy_no_cache 1', text[first:second])
-        self.assertIn('proxy_cache_valid 200 206 301 302 303 307 308 404 5s', text[second:])
-        self.assertIn('add_header Cache-Control "max-age=5" always', text[second:])
+        # without statusCodeFilters the directives apply to all origin response status codes (TS 26.510 table 8.8.3.1-1)
+        self.assertIn('proxy_cache_valid any 5s', text[second:])
+        self.assertIn('m4daccess.signal_ttl(5, {}, "', text[second:])
+        self.assertNotIn('add_header Cache-Control', text[second:])
 
     def test_status_code_filters_limit_the_codes(self):
         locn = location()
         locn.addCachingRule('x', False, 7, [404, 200])
         self.assertIn('proxy_cache_valid 200 404 7s', config(locn))
+
+    def test_without_status_code_filters_the_directives_apply_to_all_status_codes(self):
+        locn = location()
+        locn.addCachingRule('x', False, None, None)
+        text = config(locn)
+        self.assertIn('proxy_cache_valid any 10y', text)
+        self.assertEqual(locn.status_maps(), {})
+
+    def test_no_cache_and_the_header_apply_only_to_the_status_codes_of_the_filter(self):
+        locn = location()
+        locn.addCachingRule('x', True, None, [404, 410])
+        text = config(locn)
+        self.assertNotIn('proxy_no_cache 1', text)
+        self.assertNotIn('add_header Cache-Control "no-cache', text)
+        maps = locn.status_maps()
+        self.assertEqual(len(maps), 2)
+        nc = [m for m in maps.values() if 'upstream_status' in m][0]
+        cc = [m for m in maps.values() if 'map $status' in m][0]
+        self.assertIn('default "0";', nc)
+        self.assertIn('404 "1";', nc)
+        self.assertIn('410 "1";', nc)
+        self.assertIn('default "";', cc)
+        self.assertIn('404 "no-cache, no-store, max-age=0";', cc)
+        for name in maps:
+            self.assertIn('$' + name, text)
+
+    def test_the_max_age_header_applies_only_to_the_status_codes_of_the_filter(self):
+        locn = location()
+        locn.addCachingRule('x', False, 9, [200])
+        text = config(locn)
+        self.assertIn('proxy_cache_valid 200 9s', text)
+        self.assertNotIn('add_header Cache-Control', text)
+        self.assertIn('m4daccess.signal_ttl(9, {[200]=true}, "', text)
+        self.assertEqual(locn.status_maps(), {})
+
+    def test_a_no_cache_rule_without_a_filter_applies_to_every_response(self):
+        locn = location()
+        locn.addCachingRule('x', True, None, None)
+        text = config(locn)
+        self.assertIn('proxy_no_cache 1', text)
+        self.assertIn('add_header Cache-Control "no-cache, no-store, max-age=0" always', text)
 
     def test_a_pattern_that_cannot_be_written_is_refused(self):
         locn = location()
@@ -59,7 +102,8 @@ class RewriteAndCmcd(unittest.TestCase):
 
     def test_cmcd_is_not_passed_to_the_origin(self):
         text = config(location())
-        for header in ('CMCD-Request', 'CMCD-Object', 'CMCD-Status', 'CMCD-Session'):
+        # (TS 26.512 V19.3.0 clause 8.1: CMCD is not included in requests at M2d; the header field CMCD is read by the CMCD reporting too)
+        for header in ('CMCD', 'CMCD-Request', 'CMCD-Object', 'CMCD-Status', 'CMCD-Session'):
             self.assertIn(f'proxy_set_header {header} ""', text)
         self.assertIn('CMCD=[^&]*', text)
 
@@ -90,3 +134,19 @@ class AccessRules(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class MethodsToTheOrigin(unittest.TestCase):
+    def test_only_get_and_head_reach_the_origin(self):
+        # TS 26.512 V19.3.0 clause 4.6: a request that the cache cannot satisfy is transformed into a GET request to the origin
+        text = config(location())
+        self.assertIn('if method ~= "GET" and method ~= "HEAD" then', text)
+        self.assertIn('ngx.header["Allow"] = "GET, HEAD"', text)
+        self.assertIn('return ngx.exit(405)', text)
+
+    def test_the_cors_preflight_of_the_aliases_is_let_through_to_the_access_phase(self):
+        locn = location()
+        locn.cors_aliases = ['player.example']
+        text = config(locn)
+        self.assertIn('method ~= "GET" and method ~= "HEAD" and method ~= "OPTIONS"', text)
+        self.assertIn('ngx.header["Allow"] = "GET, HEAD, OPTIONS"', text)

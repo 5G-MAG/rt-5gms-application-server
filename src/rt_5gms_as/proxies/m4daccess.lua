@@ -28,7 +28,7 @@ function m4daccess.cfg(id, json)
     return c
 end
 
--- base64url (RFC 4648 section 5) without padding
+-- base64url (RFC 4648 section 5) without padding: the token is compared without it
 local function base64url(bin)
     local s = ngx.encode_base64(bin)
     s = s:gsub("%+", "-"):gsub("/", "_"):gsub("=", "")
@@ -37,7 +37,10 @@ end
 
 -- Clause 7.6.4.5: the query presented with a request for a resource that matches urlSignature.urlPattern is validated; every failure is a 403
 function m4daccess.verify_signature(sig)
-    local url = ngx.var.scheme .. "://" .. ngx.var.http_host .. (ngx.var.request_uri:match("^[^?#]*"))
+    -- an HTTP/1.0 request may have no Host header field: nginx then gives the name of the server
+    local url = ngx.var.scheme .. "://" .. (ngx.var.http_host or ngx.var.host) .. (ngx.var.request_uri:match("^[^?#]*"))
+    -- urlPattern is matched against this URL (scheme, authority and path, no query) and the token is computed over the whole URL (clause 7.6.4.5);
+    -- TS 26.510 V19.2.0 table 8.8.3.1-1 says "the portion of the M4 request URL that matches this pattern", which the texts do not reconcile
     if not ngx.re.find(url, sig.urlPattern, "jo") then
         return true
     end
@@ -45,8 +48,12 @@ function m4daccess.verify_signature(sig)
     local token = args[sig.tokenName]
     local expiry = args[sig.tokenExpiryName]
     -- step 1: the token is absent or malformed
-    if type(token) ~= "string" or not ngx.re.find(token, "^[A-Za-z0-9_-]+$", "jo") then
+    -- (RFC 4648 clause 3.2: the padding "==" of a SHA-512 value may be present or left out, clause 5 alphabet)
+    if type(token) ~= "string" or not ngx.re.find(token, "^[A-Za-z0-9_-]+={0,2}$", "jo") then
         return false
+    end
+    if token:sub(-2) == "==" then
+        token = token:sub(1, -3)
     end
     -- step 2: the expiry is absent, malformed or has passed
     if type(expiry) ~= "string" or not ngx.re.find(expiry, "^[0-9]+$", "jo") or tonumber(expiry) < ngx.time() then
@@ -141,19 +148,24 @@ function m4daccess.country_of(address, path)
     return best
 end
 
-function m4daccess.check_geo(geo, ranges_file)
-    local country = m4daccess.country_of(ngx.var.remote_addr, ranges_file)
-    if not country then
-        return false
-    end
-    for _, loc in ipairs(geo.locators) do
-        -- an ISO 3166-1 alpha-2 country code, or an ISO 3166-2 code that begins with it
-        local l = loc:upper()
-        if l == country or l:sub(1, 3) == country .. "-" then
+-- The zone of a UE is the country that the address ranges give for its address, so only a locator that is that ISO 3166-1 alpha-2
+-- country code can be met. A locator that is an ISO 3166-2 code names a subdivision of a country: the UE is not known to be inside
+-- it (it may be elsewhere in the country), so the locator does not give access.
+function m4daccess.zone_allowed(locators, country)
+    for _, loc in ipairs(locators) do
+        if loc:upper() == country then
             return true
         end
     end
     return false
+end
+
+function m4daccess.check_geo(geo, ranges_file, address)
+    local country = m4daccess.country_of(address or ngx.var.remote_addr, ranges_file)
+    if not country then
+        return false
+    end
+    return m4daccess.zone_allowed(geo.locators, country)
 end
 
 -- CORS response headers for the domain name alias of a distribution configuration (TS 26.510 table 8.8.3.1-1, domainNameAlias)
@@ -193,4 +205,39 @@ function m4daccess.filter_origin_headers()
     end
 end
 
+-- The time-to-live signalled for a resource of a caching rule (noCache false, maxAge present), TS 26.510 V19.2.0 table 8.8.3.1-1:
+-- "calculated relative to the time it was ingested by the Media AS", which TS 26.512 V19.3.0 clause 7.6.4.2 takes from the Date header
+-- field of the origin response, adding that the AS "shall compensate for any synchronization skew between the origin and its own clock".
+-- The compensation: the time of the ingest is read on the clock of the AS. A response that the AS fetches from the origin now was ingested
+-- now, and that time is kept for the cached resource (shared dictionary m4d_ingest, key like the cache key of the resource). Only when
+-- no time is kept (after a restart of nginx, or the entry was dropped) the Date of the origin response stands for it, with its skew.
+-- codes: set of the origin status codes of the rule, empty for all of them. session: the provisioning session of the location.
+function m4daccess.signal_ttl(max_age, codes, session)
+    if next(codes) ~= nil and not codes[ngx.status] then
+        return
+    end
+    local now = ngx.time()
+    local dict = ngx.shared and ngx.shared.m4d_ingest
+    local key = session and (ngx.var.m4d_key_prefix .. ":u=" .. ngx.var.m4d_path)
+    local cache_status = ngx.var.upstream_cache_status
+    local ingested
+    if cache_status == nil or cache_status == "" or cache_status == "MISS" or cache_status == "EXPIRED" or cache_status == "BYPASS" then
+        ingested = now
+        if dict and key and max_age > 0 then
+            dict:set(key, now, max_age)
+        end
+    else
+        ingested = dict and key and dict:get(key)
+        if not ingested then
+            ingested = ngx.parse_http_time(ngx.var.upstream_http_date or "")
+        end
+    end
+    local age = 0
+    if ingested then
+        age = now - ingested
+    end
+    if age < 0 then age = 0 end
+    if age > max_age then age = max_age end
+    ngx.header["Cache-Control"] = "max-age=" .. (max_age - age)
+end
 return m4daccess

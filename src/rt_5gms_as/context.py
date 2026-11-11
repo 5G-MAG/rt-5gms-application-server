@@ -35,6 +35,8 @@ from urllib.parse import urlparse
 import sys
 from typing import Optional
 
+from .templates import TemplateStore
+
 from .openapi_5g.models.application_server_content_hosting_configuration import ApplicationServerContentHostingConfiguration as ContentHostingConfiguration
 
 def wrapped_default(self, obj):
@@ -58,6 +60,10 @@ certificates_cache = /var/cache/rt-5gms/as/certificates
 # The longest time in seconds that matching one cache entry against the regular expression of a purge request may take; a
 # pattern that exceeds it is refused with 400
 purge_regex_timeout = 1.0
+# Whether this AS supports ECN marking for L4S (RFC 9330, 9331 and 9332) at reference point M4d (TS 26.512 clause 4.6.0.1). The AS does not
+# implement L4S itself: set true only when the system it runs on does (see docs/example-application-server.conf). The 5GMSd AF has the
+# equivalent option mediaAsSupportsL4s, which has to be the same.
+supports_l4s = false
 listen_address = ::
 http_port = 80
 https_port = 443
@@ -112,6 +118,7 @@ class Context(object):
         # cannot be created again, and is answered with 410)
         self.__destroyed_content_hosting_configurations = set()
         self.__destroyed_certificates = set()
+        self.__templates = None
         # Load the configurations
         self.__loadConfiguration(force=True)
         self.__loadDestroyedIdentifiers()
@@ -208,6 +215,22 @@ class Context(object):
         '''
         return resource_id in self.__destroyed_content_hosting_configurations
 
+    def contentPreparationTemplates(self):
+        '''The store of Content Preparation Templates (clause 4.5.3), kept next to the certificates cache'''
+        if self.__templates is None:
+            self.__templates = TemplateStore(os.path.join(os.path.dirname(self.certificatesCacheDir().rstrip(os.sep)), 'templates'))
+        return self.__templates
+
+    def isContentPreparationTemplateInUse(self, template_id: str):
+        '''True if a Content Hosting Configuration references the template'''
+        for provisioning_session in self.__provisioning_sessions.values():
+            if 'chc' not in provisioning_session:
+                continue
+            for dc in provisioning_session['chc'].distribution_configurations:
+                if dc.content_preparation_template_id == template_id:
+                    return True
+        return False
+
     def wasCertificateDestroyed(self, certificate_id: str):
         '''
         Check if a certificate existed and was destroyed
@@ -287,6 +310,16 @@ class Context(object):
         '''
         return self.__delContentHostingConfiguration(provisioning_session_id)
 
+    def supportsL4s(self) -> bool:
+        '''Whether the option supports_l4s of the section 5gms_as says that this AS supports ECN marking for L4S (default: no)
+
+        Raises Context.ConfigError for a value that is not a boolean.
+        '''
+        try:
+            return self.__config.getboolean('5gms_as', 'supports_l4s', fallback=False)
+        except ValueError:
+            raise Context.ConfigError('The option supports_l4s of the section 5gms_as has to be true or false')
+
     def getConfigVar(self, section, varname, default=None):
         '''Get a configuration variable from the application configuration
 
@@ -345,6 +378,15 @@ class Context(object):
         if certificate_pem_text is None:
             raise Context.ConfigError("Attempt to update certificate with empty contents");
         return self.__addCertificate(certificate_id, certificate_pem_text, force = False)
+
+    def certificateContents(self, certificate_id: str) -> Optional[str]:
+        '''
+        Get the PEM text stored for the certificate with the given ID, or None if the ID does not exist
+        '''
+        if not self.haveCertificate(certificate_id):
+            return None
+        with open(self.__certificates[certificate_id], 'r', newline='') as cert_in:
+            return cert_in.read()
 
     def deleteCertificate(self, certificate_id: str):
         '''
@@ -423,8 +465,7 @@ class Context(object):
         self.__checkProxySafeValues(chc)
         # TS 26.512 clause 4.5.4.3: an invalid reference to another resource fails the operation with 400
         for distrib in chc.distribution_configurations:
-            if distrib.content_preparation_template_id is not None:
-                # this AS holds no Content Preparation Templates, so every reference is invalid
+            if distrib.content_preparation_template_id is not None and not self.contentPreparationTemplates().have(distrib.content_preparation_template_id):
                 raise Context.ValueError('Content Preparation Template %s not found'%(distrib.content_preparation_template_id), 'distributionConfigurations.contentPreparationTemplateId')
             if distrib.certificate_id is not None and not self.haveCertificate(distrib.certificate_id):
                 raise Context.ValueError('Certificate ID %s in ContentHostingConfiguration for provisioning session Id %s not found in certificates map'%(distrib.certificate_id, provisioning_session_id), 'distributionConfigurations.certificateId')
@@ -444,6 +485,15 @@ class Context(object):
     # a host name (also "*.example.com"), and a URL path without characters that mean something in a web proxy configuration
     __HOSTNAME = re.compile(r'^(\*\.)?[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$')
     __URL_PATH = re.compile(r"^[A-Za-z0-9._~/:@%+=,-]*$")
+    # the path of the ingest baseURL is written between quotation marks like its query: the characters of the query of RFC 3986 clause 3.4 are accepted ("$" and ";" are not)
+    __INGEST_PATH = re.compile(r"^[A-Za-z0-9._~/:@%+=,!&'()*-]*$")
+    # RFC 3986 clause 3.4: query = *( pchar / "/" / "?" ), without "$" and ";" (sub-delims) that mean something in the proxy configuration
+    __URL_QUERY = re.compile(r"(?:[A-Za-z0-9._~!&'()*+,=:@/?-]|%[0-9A-Fa-f]{2})*")
+
+    @classmethod
+    def isProxySafeQuery(cls, query: str) -> bool:
+        '''A URL query that can be written between quotation marks into the web proxy configuration'''
+        return cls.__URL_QUERY.fullmatch(query) is not None
 
     @staticmethod
     def __regexSafe(pattern: str) -> bool:
@@ -464,9 +514,11 @@ class Context(object):
         '''
         base = urlparse(str(chc.ingest_configuration.base_url)) if chc.ingest_configuration.base_url is not None else None
         if base is None or base.scheme not in ('http', 'https') or not base.hostname or self.__HOSTNAME.match(base.hostname) is None \
-                or self.__URL_PATH.match(base.path or '') is None or any(p is not None and p != '' and not self.__URL_PATH.match(p) for p in (base.params,)) \
-                or base.query or base.fragment:
-            raise Context.ValueError('The ingest baseURL has to be an http or https URL with a plain host name and path', 'ingestConfiguration.baseURL')
+                or self.__INGEST_PATH.match(base.path or '') is None or any(p is not None and p != '' and not self.__INGEST_PATH.match(p) for p in (base.params,)) \
+                or base.fragment or re.search(r'[\x00-\x20\x7f#]', str(chc.ingest_configuration.base_url)) \
+                or not self.isProxySafeQuery(str(chc.ingest_configuration.base_url).partition('?')[2]):
+            # TS 26.510 V19.2.0 clause 8.8.3.1: an AbsoluteUrl (RFC 3986 clause 4.3 absolute-URI) has an optional query and no fragment
+            raise Context.ValueError('The ingest baseURL has to be an http or https URL with a plain host name and path and a query of unreserved, percent-encoded or sub-delimiter characters (no $ or ;)', 'ingestConfiguration.baseURL')
         for distrib in chc.distribution_configurations:
             if distrib.canonical_domain_name is None or self.__HOSTNAME.match(distrib.canonical_domain_name) is None:
                 raise Context.ValueError('The canonicalDomainName has to be a host name', 'distributionConfigurations.canonicalDomainName')
@@ -609,11 +661,12 @@ class Context(object):
         '''
         cache_filename = os.path.join(self.certificatesCacheDir(), cert_id)
         if os.path.exists(cache_filename) and not force:
-            with open(cache_filename, 'r') as cert_in:
+            # newline='' keeps the line ends as stored: a bundle with CRLF is identical to itself (TS 26.512 V19.3.0 clause 4.5.2.5, 204)
+            with open(cache_filename, 'r', newline='') as cert_in:
                 existing_cert = cert_in.read()
             if existing_cert == cert_contents:
                 return False
-        with open(cache_filename, 'w') as cert_out:
+        with open(cache_filename, 'w', newline='') as cert_out:
             cert_out.write(cert_contents)
         self.__certificates[cert_id] = cache_filename
         return True

@@ -224,8 +224,9 @@ class WebProxyInterface(object):
     async def reloadAndWait(self, timeout: float = 5.0):
         '''Reload after context changes and wait until the new configuration is in use
 
-        Returns True if the new configuration is in use, False if the reload failed or was still in progress after
-        _timeout_ seconds. This base implementation cannot tell and returns the result of reload().
+        Returns True if the new configuration is in use, False (or None) if the reload failed or was still in progress
+        after _timeout_ seconds; the M3 operations report success only for True. This base implementation cannot tell
+        and returns the result of reload().
         '''
         return await self.reload()
 
@@ -274,7 +275,9 @@ class WebProxyInterface(object):
     async def purgeUsingRegex(self, provisioningSessionId: str, re: str) -> int:
         '''Purge cache entries for the provisioning session that match a regex
 
-        Returns the number of items purged.
+        The expression is a regular expression as of ECMA-262 (TS 26.512 V19.3.0 clause 4.5.4.9), which is searched for in the text and
+        not anchored at its start, as the other patterns of the Content Hosting Configuration are. The text is the path of the request
+        URL as the M4d client sent it (without the query). Returns the number of items purged.
         '''
         self._context.appLog().debug('Purging entries for %s using regex %s...', provisioningSessionId, re)
         try:
@@ -294,7 +297,7 @@ class WebProxyInterface(object):
             if psid != provisioningSessionId:
                 return False
             try:
-                return comp_regex.match(path, timeout=timeout) is not None
+                return comp_regex.search(path, timeout=timeout) is not None
             except TimeoutError:
                 raise WebProxyRegexTimeout('The regular expression took longer than %s s on one cache entry' % timeout)
         return await self._purge(key_filter=matches)

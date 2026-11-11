@@ -3,7 +3,7 @@ import copy
 import unittest
 
 from rt_5gms_as.openapi_5g.models.application_server_content_hosting_configuration import ApplicationServerContentHostingConfiguration
-from rt_5gms_as.schema_checks import content_hosting_configuration_min_items
+from rt_5gms_as.schema_checks import content_hosting_configuration_min_items, content_hosting_configuration_value_problems
 
 BASE = {
     'externalServiceId': 'x', 'name': 'n',
@@ -39,6 +39,29 @@ class MinItemsTest(unittest.TestCase):
             d['cachingConfigurations'] = [{'urlPatternFilter': '.*', 'cachingDirectives': {'statusCodeFilters': [200]}}]
             d['geoFencing'] = {'locatorType': 'urn:x', 'locators': ['CH']}
         self.assertEqual(problems(mutate), [])
+
+
+class ValueChecksTest(unittest.TestCase):
+    def check(self, mutate):
+        body = copy.deepcopy(BASE)
+        mutate(body)
+        return [p['param'] for p in content_hosting_configuration_value_problems(ApplicationServerContentHostingConfiguration.model_validate(body))]
+
+    def test_entry_point_has_exactly_one_of_content_type_and_protocol(self):
+        d = lambda b: b['distributionConfigurations'][0]
+        self.assertEqual(self.check(lambda b: d(b).update(entryPoint={'relativePath': 'a.mpd', 'contentType': 'application/dash+xml'})), [])
+        self.assertEqual(self.check(lambda b: d(b).update(entryPoint={'relativePath': 'a.mpd', 'protocol': 'urn:x'})), [])
+        self.assertEqual(self.check(lambda b: d(b).update(entryPoint={'relativePath': 'a.mpd'})), ['distributionConfigurations[0].entryPoint'])
+        self.assertEqual(self.check(lambda b: d(b).update(entryPoint={'relativePath': 'a.mpd', 'contentType': 'x', 'protocol': 'urn:x'})),
+                         ['distributionConfigurations[0].entryPoint'])
+
+    def test_relative_path_and_status_code_filters(self):
+        d = lambda b: b['distributionConfigurations'][0]
+        self.assertEqual(self.check(lambda b: d(b).update(entryPoint={'relativePath': 'http://[bad', 'contentType': 'x'})),
+                         ['distributionConfigurations[0].entryPoint.relativePath'])
+        for code, bad in ((99, True), (100, False), (599, False), (600, True)):
+            r = self.check(lambda b: d(b).update(cachingConfigurations=[{'urlPatternFilter': '.*', 'cachingDirectives': {'statusCodeFilters': [code]}}]))
+            self.assertEqual(bool(r), bad, code)
 
 
 if __name__ == '__main__':
