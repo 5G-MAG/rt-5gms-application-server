@@ -67,11 +67,18 @@ MAX_SAMPLE_LINE = 64 * 1024
 
 #### CMCD (CTA-5004 version 1) ####
 
-_CMCD_PAIR = re.compile(r'\s*([A-Za-z][A-Za-z0-9-]*)(?:=("(?:[^"\\]|\\.)*"|[^,]*))?\s*(?:,|$)')
+# the key syntax of RFC 8941 clause 3.1.2, which CTA-5004 clause 4.1 requires: a custom key has a hyphenated, typically reverse-DNS, prefix
+# (com.example-key), so a key can hold dots and underscores too
+_CMCD_PAIR = re.compile(r'\s*([A-Za-z*][A-Za-z0-9_.*-]*)(?:=("(?:[^"\\]|\\.)*"|[^,]*))?\s*(?:,|$)')
+
+
+class CmcdString(str):
+    '''A value in quotation marks (an RFC 8941 String); a value without them is a plain str (Token, Integer, Decimal or Boolean)'''
 
 
 def parse_cmcd(text: str) -> Dict[str, Any]:
-    '''The key-value pairs of a CMCD payload (CTA-5004 clause 3.1): a value is a string without its quotation marks, a key without a value is True'''
+    '''The key-value pairs of a CMCD payload (CTA-5004 clause 3.1): a value in quotation marks is a CmcdString without its quotation marks,
+    a key without a value is True, any other value is kept as written'''
     result: Dict[str, Any] = {}
     pos = 0
     text = text or ''
@@ -83,40 +90,45 @@ def parse_cmcd(text: str) -> Dict[str, Any]:
         if value is None:
             result[key] = True
         elif value.startswith('"') and value.endswith('"') and len(value) >= 2:
-            result[key] = re.sub(r'\\(.)', r'\1', value[1:-1])
+            result[key] = CmcdString(re.sub(r'\\(.)', r'\1', value[1:-1]))
         else:
             result[key] = value.strip()
         pos = match.end()
     return result
 
 
+# CTA-5004-B clauses 4.1 and 6: a String is in quotation marks, a Token, an Integer or a Decimal is not, a Boolean is true as a bare key (or ?1)
+# and false as ?0; a value that does not have the type of its key is ignored. Integers and decimals as of RFC 8941 clauses 3.3.1 and 3.3.2.
+def _unquoted(value: Any) -> bool:
+    return isinstance(value, str) and not isinstance(value, CmcdString)
+
+
 def _int(value: Any, minimum: Optional[int] = None) -> Optional[int]:
-    if isinstance(value, str) and re.fullmatch(r'-?[0-9]+', value):
+    if _unquoted(value) and re.fullmatch(r'-?[0-9]{1,15}', value):
         number = int(value)
         return number if minimum is None or number >= minimum else None
     return None
 
 
 def _number(value: Any) -> Optional[float]:
-    if isinstance(value, str) and re.fullmatch(r'-?[0-9]+(\.[0-9]+)?', value):
+    if _unquoted(value) and re.fullmatch(r'-?[0-9]{1,12}(\.[0-9]{1,3})?', value):
         number = float(value)
         return int(number) if number == int(number) else number
     return None
 
 
 def _flag(value: Any) -> Optional[bool]:
-    # a key without a value is true (CTA-5004 clause 3.2)
-    if value is True or value == 'true':
+    if value is True or value == '?1':
         return True
-    return False if value == 'false' else None
+    return False if value == '?0' else None
 
 
 def _text(value: Any) -> Optional[str]:
-    return value if isinstance(value, str) and value != '' else None
+    return str(value) if isinstance(value, CmcdString) and value != '' else None
 
 
 def _enum(*allowed: str) -> Callable[[Any], Optional[str]]:
-    return lambda value: value if isinstance(value, str) and value in allowed else None
+    return lambda value: value if _unquoted(value) and value in allowed else None
 
 
 # RFC 3986 clause 4.2 relative-ref, as far as characters go: unreserved, sub-delims, ":", "@", "/", "?", "#" and percent-encoded octets
@@ -124,7 +136,7 @@ _RELATIVE_REF = re.compile(r"(?:[A-Za-z0-9._~!$&'()*+,;=:@/?#-]|%[0-9A-Fa-f]{2})
 
 
 def _relative_ref(value: Any) -> Optional[str]:
-    return value if isinstance(value, str) and value != '' and _RELATIVE_REF.fullmatch(value) else None
+    return str(value) if isinstance(value, CmcdString) and value != '' and _RELATIVE_REF.fullmatch(value) else None
 
 
 # the keys of each class of CMCD information and their types (TS 26.512 tables 11.4.3.3.2-1 to 11.4.3.3.2-7, TS26512_ClientData.yaml)
@@ -134,19 +146,27 @@ CMCD_CLASSES: Dict[str, Dict[str, Callable[[Any], Any]]] = {
     'request': {'su': _flag, 'mtp': _int, 'dl': _int, 'bl': _int, 'nor': _relative_ref, 'nrr': _text},
     'status': {'rtp': _int, 'bs': _flag},
 }
+# the keys with a numeric value: only these can cross a threshold (the others are identifiers, enumerations, flags or URLs)
+NUMERIC_KEYS = {'session': {'v', 'pr'}, 'object': {'d', 'br', 'tb'}, 'request': {'mtp', 'dl', 'bl'}, 'status': {'rtp'}}
 _CLASS_PROPERTY = {'session': 'cmcdSessionInfo', 'object': 'cmcdObjectInfo', 'request': 'cmcdRequestInfo', 'status': 'cmcdStatusInfo'}
 _CMCD_HEADERS = ('CMCD-Object', 'CMCD-Request', 'CMCD-Status', 'CMCD-Session')
 
 
 def collect_cmcd(query: Optional[str], headers: Optional[Dict[str, str]]) -> Dict[str, Any]:
-    '''The CMCD key-value pairs of a request: the CMCD query argument and the CMCD request headers (CTA-5004 clause 2)'''
+    '''The CMCD key-value pairs of a request: the CMCD request headers, or the CMCD query argument if there is no CMCD header
+
+    CTA-5004-B clause 6: a server processes the query argument or the request headers, never both; if any CMCD header is present, the query
+    argument is ignored (CTA-5004 clause 2 lets a client use one transmission mode for a request).
+    '''
+    lowered = {str(k).lower(): v for k, v in (headers or {}).items()}
     pairs: Dict[str, Any] = {}
+    present = [name for name in _CMCD_HEADERS if isinstance(lowered.get(name.lower()), str)]
+    if present:
+        for name in present:
+            pairs.update(parse_cmcd(lowered[name.lower()]))
+        return pairs
     for value in urllib.parse.parse_qs(query or '', keep_blank_values=True).get('CMCD', []):
         pairs.update(parse_cmcd(value))
-    lowered = {str(k).lower(): v for k, v in (headers or {}).items()}
-    for name in _CMCD_HEADERS:
-        if isinstance(lowered.get(name.lower()), str):
-            pairs.update(parse_cmcd(lowered[name.lower()]))
     return pairs
 
 
@@ -172,11 +192,24 @@ def client_data(cmcd_class: str, pairs: Dict[str, Any], keys: Optional[set]) -> 
 
 #### Service Access Information ####
 
+def parse_term(term: Any) -> Optional[Tuple[str, Optional[str]]]:
+    '''The class and the key of a term of the vocabulary of TS 26.512 clause E.2.5; the key is None for a term with the class only'''
+    if not isinstance(term, str) or not term.startswith(CMCD_TERM_PREFIX):
+        return None
+    cmcd_class, slash, key = term[len(CMCD_TERM_PREFIX):].partition('/')
+    if cmcd_class not in CMCD_CLASSES:
+        return None
+    if not slash:
+        return cmcd_class, None
+    return (cmcd_class, key) if key in CMCD_CLASSES[cmcd_class] else None
+
+
 class ReportConfig(object):
     '''A client metrics reporting configuration of a CMCD scheme (TS 26.510 table 9.2.3.1-1)'''
     def __init__(self, provisioning_session_id: str, entry: Dict[str, Any]):
         self.provisioning_session_id = provisioning_session_id
         self.id = str(entry['metricsReportingConfigurationId'])
+        self.fingerprint = json.dumps(entry, sort_keys=True)
         self.server_addresses = [str(a) for a in entry['serverAddresses']]
         self.cmcd_class = str(entry['scheme'])[len(CMCD_SCHEME_PREFIX):]
         self.sample_percentage = float(entry['samplePercentage'])
@@ -185,7 +218,11 @@ class ReportConfig(object):
         self.duration = self.__seconds(entry.get('reportingDuration'))
         self.sampling_period = self.__seconds(entry.get('samplingPeriod')) or 0
         self.url_filters = [str(p) for p in entry.get('urlFilters') or []]
-        self.keys = self.__keys(self.cmcd_class, entry.get('metrics'))
+        self.terms = self.__terms(self.cmcd_class, entry.get('metrics'))
+        self.unevaluable: List[str] = []
+        self.positive = self.__thresholds(entry.get('positiveCrossingThresholds'), 'positiveCrossingThresholds')
+        self.negative = self.__thresholds(entry.get('negativeCrossingThresholds'), 'negativeCrossingThresholds')
+        self.thresholded = set(self.positive) | set(self.negative)
         if self.cmcd_class not in CMCD_CLASSES or not self.server_addresses or not 0 <= self.sample_percentage <= 100:
             raise ValueError('not a client metrics reporting configuration of a CMCD scheme')
 
@@ -196,17 +233,68 @@ class ReportConfig(object):
         return None
 
     @staticmethod
-    def __keys(cmcd_class: str, metrics: Any) -> Optional[set]:
-        # the metrics are terms of the vocabulary of TS 26.512 clause E.2.5: class and key, without a list all keys of the scheme
+    def __terms(cmcd_class: str, metrics: Any) -> Dict[str, set]:
+        '''The keys to report of each class of CMCD information, from the metrics property
+
+        TS 26.512 clause 7.8.1: the metrics are terms of the vocabulary of clause E.2.5, the first path element is the class and the second a
+        key of that class; a term with the class only (E.2.1 example 2: a pruned term selects the branch) selects all keys of the class. The
+        text does not tie the class of a term to the class of the scheme, so a term of another class is reported too. Without metrics the
+        whole set of the scheme is reported: all keys of its class.
+        '''
         if not isinstance(metrics, list) or not metrics:
-            return None
-        keys = set()
+            return {cmcd_class: set(CMCD_CLASSES.get(cmcd_class, {}))}
+        terms: Dict[str, set] = {}
         for term in metrics:
-            if isinstance(term, str) and term.startswith(CMCD_TERM_PREFIX):
-                term_class, _, key = term[len(CMCD_TERM_PREFIX):].partition('/')
-                if term_class == cmcd_class and key in CMCD_CLASSES.get(cmcd_class, {}):
-                    keys.add(key)
-        return keys
+            parsed = parse_term(term)
+            if parsed is not None:
+                term_class, key = parsed
+                terms.setdefault(term_class, set()).update(CMCD_CLASSES[term_class] if key is None else {key})
+        return terms
+
+    def __thresholds(self, table: Any, label: str) -> Dict[Tuple[str, str], List[float]]:
+        '''The threshold values of each metric (TS 26.510 clause 8.11.3.1: a map of term identifiers to arrays of floating-point values)
+
+        A threshold is kept for a metric that is collected (listed in the metrics property or in the whole set) and has a numeric value. What
+        the AS cannot evaluate is left out and named in self.unevaluable: a term with the class only, a key that is no number, a metric that
+        is not collected.
+        '''
+        result: Dict[Tuple[str, str], List[float]] = {}
+        for term, values in (table.items() if isinstance(table, dict) else []):
+            parsed = parse_term(term)
+            numbers = sorted({float(v) for v in values if isinstance(v, (int, float)) and not isinstance(v, bool)}) if isinstance(values, list) else []
+            if parsed is None or parsed[1] is None or parsed[1] not in NUMERIC_KEYS[parsed[0]] or parsed[1] not in self.terms.get(parsed[0], ()) or not numbers:
+                self.unevaluable.append('%s %s' % (label, term))
+            else:
+                result[(parsed[0], parsed[1])] = numbers
+        return result
+
+    def crossings(self, armed: Dict[Tuple[str, str, str, float], bool], pairs: Dict[str, Any]) -> Tuple[set, bool]:
+        '''The metrics that cross a threshold in the CMCD information of one request, as (class, key) pairs, and whether any value was seen
+
+        TS 26.510 clauses 5.2.11.1 and 8.11.3.1: a metric is reported once when its value exceeds a threshold of positiveCrossingThresholds
+        (falls below one of negativeCrossingThresholds) and is not reported again until it falls below that threshold (exceeds it) and
+        subsequently exceeds it (falls below it) again. The state of each threshold is kept in armed (a missing entry is armed): a value that is
+        equal to the threshold neither crosses it nor arms it again.
+        '''
+        crossed: set = set()
+        seen = False
+        for direction, table in (('positive', self.positive), ('negative', self.negative)):
+            for (cmcd_class, key), thresholds in table.items():
+                value = CMCD_CLASSES[cmcd_class][key](pairs[key]) if key in pairs else None
+                if value is None:
+                    continue
+                seen = True
+                for threshold in thresholds:
+                    state = (direction, cmcd_class, key, threshold)
+                    above, below = value > threshold, value < threshold
+                    exceeding, falling = (above, below) if direction == 'positive' else (below, above)
+                    if armed.get(state, True):
+                        if exceeding:
+                            armed[state] = False
+                            crossed.add((cmcd_class, key))
+                    elif falling:
+                        armed[state] = True
+        return crossed, seen
 
     def url_wanted(self, url: str) -> bool:
         '''urlFilters: regular expressions of the request URLs to report; without them all are reported'''
@@ -236,6 +324,8 @@ def parse_service_access_information(body: Any, log: Optional[logging.Logger] = 
             continue
         try:
             configs.append(ReportConfig(psid, entry))
+            if log is not None and configs[-1].unevaluable:
+                log.info('Crossing thresholds of %s that the AS cannot evaluate: %s', configs[-1].id, ', '.join(configs[-1].unevaluable))
         except (KeyError, TypeError, ValueError) as err:
             if log is not None:
                 log.warning('Client metrics reporting configuration ignored: %s', err)
@@ -334,6 +424,8 @@ class _Session(object):
         self.pending: Dict[str, List[Dict[str, Any]]] = {}
         self.last_sample: Dict[str, float] = {}
         self.last_report: Dict[str, float] = {}
+        self.single_taken: set = set()
+        self.armed: Dict[str, Dict[Tuple[str, str, str, float], bool]] = {}
         self.content_id: Optional[str] = None
 
 
@@ -396,14 +488,40 @@ class MetricsReporter(object):
             except ValueError:
                 self.__log.warning('Service Access Information of %s is not JSON', external_service_id)
                 return
+            previous = sai.configs
             sai.provisioning_session_id, sai.configs = psid, configs
+            self.__configurations_changed(external_service_id, previous, configs)
             sai.etag, sai.last_modified = response.headers.get('etag'), response.headers.get('last-modified')
             sai.next_poll = now + _max_age(response.headers, now)
             self.__log.info('Service Access Information of %s: %d CMCD metrics reporting configuration(s)', external_service_id, len(configs))
         else:
             if response.status_code == 404:
+                previous = sai.configs
                 sai.configs, sai.etag, sai.last_modified = [], None, None
+                self.__configurations_changed(external_service_id, previous, [])
             self.__log.warning('Service Access Information of %s: the AF answered %d', external_service_id, response.status_code)
+
+    def __activate(self, config: ReportConfig) -> bool:
+        '''TS 26.510 clause 5.3.5.1: active at 100 percent; below that a random number in 0 to 100 has to be lower than the percentage'''
+        return config.sample_percentage >= 100 or self.__random() * 100 < config.sample_percentage
+
+    def __configurations_changed(self, external_service_id: str, previous: List[ReportConfig], current: List[ReportConfig]) -> None:
+        '''TS 26.510 clause 5.3.5.1: whenever a configuration changes the decision to activate is taken again for the sessions that have decided'''
+        old = {c.id: c.fingerprint for c in previous}
+        new = {c.id: c for c in current}
+        external = self.__external_service_ids()
+        for (psid, _), session in self.__sessions.items():
+            if external.get(psid) != external_service_id:
+                continue
+            for config_id in list(session.active):
+                config = new.get(config_id)
+                if config is None:
+                    del session.active[config_id]
+                    session.single_taken.discard(config_id)
+                    session.armed.pop(config_id, None)
+                elif old.get(config_id) != config.fingerprint:
+                    session.active[config_id] = self.__activate(config)
+                    session.armed.pop(config_id, None)
 
     async def refresh_due(self) -> None:
         '''Get the Service Access Information of every Content Hosting Configuration whose time has come'''
@@ -437,22 +555,38 @@ class MetricsReporter(object):
         session.content_id = _text(pairs.get('cid')) or session.content_id
         for config in configs:
             if config.id not in session.active:
-                # TS 26.510 clause 5.3.5.1: decided at the start of the session; below 100 percent a random number in 0 to 100 has to be lower
-                session.active[config.id] = config.sample_percentage >= 100 or self.__random() * 100 < config.sample_percentage
+                # decided at the start of the session, and again when the configuration changes
+                session.active[config.id] = self.__activate(config)
             if not session.active[config.id] or not config.url_wanted(url):
                 continue
             offset = now - session.start
-            if offset < config.start_offset or (config.duration is not None and offset > config.start_offset + config.duration):
+            if config.duration == 0:
+                # TS 26.510 clause 8.11.3.1: a single report at reportingStartOffset, from the first request after the offset has passed
+                if offset < config.start_offset or config.id in session.single_taken:
+                    continue
+            elif offset < config.start_offset or (config.duration is not None and offset > config.start_offset + config.duration):
                 continue
             if now - session.last_sample.get(config.id, -1e18) < config.sampling_period:
                 continue
-            data = client_data(config.cmcd_class, pairs, config.keys)
-            if data is None:
+            # a metric with thresholds is reported when it crosses one, the others at each sample
+            crossed, seen = config.crossings(session.armed.setdefault(config.id, {}), pairs) if config.thresholded else (set(), False)
+            data = {}
+            for cmcd_class, keys in config.terms.items():
+                keys = {k for k in keys if (cmcd_class, k) not in config.thresholded} | {k for c, k in crossed if c == cmcd_class}
+                info = client_data(cmcd_class, pairs, keys) if keys else None
+                if info is not None:
+                    data[_CLASS_PROPERTY[cmcd_class]] = info
+            if not data and not seen:
                 continue
+            # a value that was looked at is a sample taken, also when nothing crosses
             session.last_sample[config.id] = now
+            if not data:
+                continue
+            if config.duration == 0:
+                session.single_taken.add(config.id)
             pending = session.pending.setdefault(config.id, [])
             pending.append({'sampleTimestamp': _timestamp(now),
-                            'mediaStreamingClientData': {'requestUrl': url, _CLASS_PROPERTY[config.cmcd_class]: data}})
+                            'mediaStreamingClientData': {'requestUrl': url, **data}})
             del pending[:-MAX_PENDING_SAMPLES]
 
     #### Reports (TS 26.510 clause 5.3.5.1) ####
@@ -465,10 +599,11 @@ class MetricsReporter(object):
             ended = now - session.last_seen >= self.__idle
             for config_id, samples in list(session.pending.items()):
                 config = configs.get(config_id)
-                if config is None:
+                if config is None or session.active.get(config_id) is False:
+                    # no longer offered, or the procedure is not active (any more) for this session
                     del session.pending[config_id]
                     continue
-                if samples and (ended or (config.interval and now - session.last_report.get(config_id, session.start) >= config.interval)):
+                if samples and (ended or config.duration == 0 or (config.interval and now - session.last_report.get(config_id, session.start) >= config.interval)):
                     sends.append((config, key[1], session.content_id, list(samples)))
                     session.pending[config_id] = []
                     # the interval timer starts again when a report is produced
