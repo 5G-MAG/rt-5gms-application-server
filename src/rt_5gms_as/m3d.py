@@ -23,7 +23,7 @@
 
 Configuration, in the section ``[5gms_as.m3d]`` of the application configuration file (nothing happens without ``af_url``)::
 
-    af_url = http://127.0.0.26:7777        # the M3d address of the AF (its configuration key msaf.m3)
+    af_url = http://127.0.0.26:7777        # the M3d address of the AF (its configuration key maf.m3)
     oauth_client_id = as1                  # client credentials at the token endpoint of the AF; without them no token is sent
     oauth_client_secret = change-me
     oauth_scope = service-access-information_retrieve metrics-report_submit

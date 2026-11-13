@@ -32,7 +32,7 @@ and serve it to 5GMSd Clients at reference point M4d.
 
 The 5GMSd AS is configured via a RESTful network API at reference point M3, therefore you will need an appropriate M3
 client to configure the 5GMSd AS. Such a client is the
-[5GMS AF](https://github.com/5G-MAG/rt-5gms-application-function) (release v1.1.0 and above).
+[Media AF](https://github.com/5G-MAG/rt-media-application-function) (release v1.1.0 and above).
 
 The web server or reverse proxy functionality is provided by an external daemon process. This 5GMSd AS manages the
 external daemon by dynamically writing its configuration files and managing the daemon process lifecycle. At present,
@@ -171,7 +171,7 @@ you will need to follow the instructions for creating and using an alternative c
 can be found in
 the [development documentation](https://5g-mag.github.io/Getting-Started/pages/5g-media-streaming/usage/application-server/testing-AS.html#running-the-example-without-building).
 
-Once running you will need an M3 client, such as the [5GMS AF](https://github.com/5G-MAG/rt-5gms-application-function),
+Once running you will need an M3 client, such as the [Media AF](https://github.com/5G-MAG/rt-media-application-function),
 to manage the running AS. For standalone configuration for testing, see the "Testing without the Application Function"
 section of
 the [development documentation](https://5g-mag.github.io/Getting-Started/pages/5g-media-streaming/usage/application-server/testing-AS.html#testing-without-the-application-function).
