@@ -80,8 +80,8 @@ class Order(unittest.TestCase):
                  ('PUT', '/content-hosting-configurations/c-live', None),
                  ('POST', '/content-hosting-configurations/c-gone/active', 410), ('POST', '/content-hosting-configurations/c-none/purge', 404),
                  ('POST', '/content-hosting-configurations/c-live/purge', None),
-                 # not a PUT or POST of these resources, or an identifier that the handler refuses itself
-                 ('POST', '/content-hosting-configurations/c-none', None), ('PUT', '/content-hosting-configurations/a%2Fb', None),
+                 # not a PUT or POST of these resources, or an identifier that the handler refuses itself (too long for a file name)
+                 ('POST', '/content-hosting-configurations/c-none', None), ('PUT', '/content-hosting-configurations/' + 'x' * 300, None),
                  ('PUT', '/content-hosting-configurations', None), ('DELETE', '/certificates/k-none', None))
         for method, path, expected in cases:
             with self.subTest(method=method, path=path):

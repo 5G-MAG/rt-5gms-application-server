@@ -47,6 +47,8 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 import httpx
 import regex
 
+from .utils import decode_resource_id
+
 API_PATH = '/3gpp-maf-session-handling/v1'
 CMCD_SCHEME_PREFIX = 'urn:3gpp:5gms:metrics:common-media-client-data:'
 CMCD_TERM_PREFIX = 'urn:3gpp:5gms:event-exposure:common-media-client-data#'
@@ -672,7 +674,7 @@ class MetricsReporter(object):
                     break
                 try:
                     sample = json.loads(line.decode('utf-8'))
-                    self.add_sample(str(sample['ps']), str(sample['url']), sample.get('query'), sample.get('headers'))
+                    self.add_sample(decode_resource_id(str(sample['ps'])), str(sample['url']), sample.get('query'), sample.get('headers'))
                 except (ValueError, KeyError, TypeError, AttributeError):
                     self.__log.debug('Sample ignored')
         finally:

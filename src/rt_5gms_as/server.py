@@ -19,6 +19,7 @@ from .exceptions import ProblemException, NoProblemException
 from .context import Context
 from .schema_checks import content_hosting_configuration_min_items, content_hosting_configuration_value_problems, purge_form_problem
 from .proxy_factory import WebProxyError, WebProxyRegexTimeout
+from .utils import encode_resource_id, MAX_ENCODED_RESOURCE_ID
 from typing import Tuple
 
 import base64
@@ -97,7 +98,13 @@ class M3Server:
             ctx.appLog().error("The web proxy could not be reloaded for %s: %s", what, err)
             return False
 
-    __RESOURCE_ID = regex.compile(r'^[A-Za-z0-9._:-]{1,200}$')
+    @staticmethod
+    def __valid_id(resource_id):
+        # TS 26.512 V19.3.0 clause 6.4.2: any string chosen by the AF; only what the file system of the AS cannot name is refused
+        try:
+            return 0 < len(encode_resource_id(resource_id)) <= MAX_ENCODED_RESOURCE_ID
+        except UnicodeError:
+            return False
 
     def __check_schema(self, request, content_hosting_configuration):
         '''Reject a Content Hosting Configuration that breaks a constraint the generated models do not enforce
@@ -114,9 +121,9 @@ class M3Server:
             raise problem
 
     def __check_id(self, request, af_resource_id):
-        # the identifier is used in a file name (certificates) and in the proxy configuration: no path separators or dot segments
-        if self.__RESOURCE_ID.match(af_resource_id) is None or af_resource_id in ('.', '..'):
-            raise ProblemException(status_code=400, title='Bad Request', detail='The resource identifier is not valid', instance=request.url.path, invalid_params=[{'param': 'afResourceId', 'reason': 'Only letters, digits and . _ : - are allowed'}])
+        # the identifier is used in a file name (certificates, templates): the encoded form has to fit in one
+        if not self.__valid_id(af_resource_id):
+            raise ProblemException(status_code=400, title='Bad Request', detail='The resource identifier is not valid', instance=request.url.path, invalid_params=[{'param': 'afResourceId', 'reason': 'The percent-encoded identifier is longer than %d characters' % MAX_ENCODED_RESOURCE_ID}])
 
     @staticmethod
     def __cannot_provision(request, what):
@@ -148,7 +155,7 @@ class M3Server:
             rid, have, destroyed, what = parts[-2], ctx.haveContentHostingConfiguration, ctx.wasContentHostingConfigurationDestroyed, 'Content Hosting Configuration'
         else:
             return None
-        if self.__RESOURCE_ID.match(rid) is None or have(rid):
+        if not self.__valid_id(rid) or have(rid):
             return None
         try:
             self.__gone_or_missing(request, destroyed(rid), what)

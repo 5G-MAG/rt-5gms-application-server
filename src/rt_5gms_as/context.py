@@ -36,6 +36,7 @@ import sys
 from typing import Optional
 
 from .templates import TemplateStore
+from .utils import encode_resource_id, decode_resource_id
 
 from .openapi_5g.models.application_server_content_hosting_configuration import ApplicationServerContentHostingConfiguration as ContentHostingConfiguration
 
@@ -659,7 +660,7 @@ class Context(object):
         '''
         Add a certificate to the cache
         '''
-        cache_filename = os.path.join(self.certificatesCacheDir(), cert_id)
+        cache_filename = os.path.join(self.certificatesCacheDir(), encode_resource_id(cert_id))
         if os.path.exists(cache_filename) and not force:
             # newline='' keeps the line ends as stored: a bundle with CRLF is identical to itself (TS 26.512 V19.3.0 clause 4.5.2.5, 204)
             with open(cache_filename, 'r', newline='') as cert_in:
@@ -680,8 +681,7 @@ class Context(object):
             raise Context.ConfigError("No such certificate")
         if self.__certificateInUse(certificate_id):
             raise Context.ConfigError("Certificate still in use by a ContentHostingConfiguration, refusing to delete")
-        del self.__certificates[certificate_id]
-        os.remove(os.path.join(self.certificatesCacheDir(),certificate_id))
+        os.remove(self.__certificates.pop(certificate_id))
         self.__destroyed_certificates.add(certificate_id)
         self.__saveDestroyedIdentifiers()
         return True
@@ -691,7 +691,7 @@ class Context(object):
         if os.path.isdir(self.certificatesCacheDir()):
             for de in os.scandir(self.certificatesCacheDir()):
                 if de.is_file():
-                    certs[de.name] = de.path
+                    certs[decode_resource_id(de.name)] = de.path
         if force or certs != self.__certificates:
             self.__certificates = certs
             return True

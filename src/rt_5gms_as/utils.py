@@ -26,10 +26,11 @@ import inspect
 import os
 import os.path
 import subprocess
+import urllib.parse
 
 from typing import Any, Callable, Awaitable
 
-__all__ = ['find_executable_on_path', 'traverse_directory_tree', 'async_create_task']
+__all__ = ['find_executable_on_path', 'traverse_directory_tree', 'async_create_task', 'encode_resource_id', 'decode_resource_id', 'MAX_ENCODED_RESOURCE_ID']
 
 def find_executable_on_path(cmd, *, verify=None, extra_paths=None):
     '''Find an executable command on the current $PATH
@@ -60,3 +61,21 @@ async def traverse_directory_tree(rootpath: str, filtcoro: Callable[[str,bool,An
         for filename in filenames:
             result = await filtcoro(os.path.join(dirpath,filename), False, result)
     return result
+
+# longest encoded identifier that is still a file name on common file systems (255 bytes)
+MAX_ENCODED_RESOURCE_ID = 240
+
+def encode_resource_id(resource_id):
+    '''A resource identifier as a string of unreserved characters and percent-encoded octets (RFC 3986 clause 2)
+
+    TS 26.512 V19.3.0 clause 6.4.2: a ResourceId is any string chosen by the 5GMS AF. The encoded form is used where the identifier is a file name
+    or is written between quotation marks into the web proxy configuration. It never starts with a dot, so it is neither "." nor "..".
+    '''
+    name = urllib.parse.quote(resource_id, safe='')
+    if name.startswith('.'):
+        name = '%2E' + name[1:]
+    return name
+
+def decode_resource_id(name):
+    '''The resource identifier of an encoded one'''
+    return urllib.parse.unquote(name)

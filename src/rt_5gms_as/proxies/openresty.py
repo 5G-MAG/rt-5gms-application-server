@@ -42,7 +42,7 @@ from typing import Dict, Optional, Tuple, List, Any, Set
 from urllib.parse import urlparse
 
 from ..proxy_factory import WebProxyInterface, add_web_proxy
-from ..utils import find_executable_on_path, traverse_directory_tree
+from ..utils import find_executable_on_path, traverse_directory_tree, encode_resource_id, decode_resource_id
 from ..context import Context
 from .. import m3d
 
@@ -60,6 +60,8 @@ class OpenRestyLocationConfig(object):
         self.path_prefix: str = path_prefix
         self.downstream_prefix_url: str = downstream_prefix_url
         self.provisioning_session: str = provisioning_session
+        # any string can be a ResourceId (TS 26.512 V19.3.0 clause 6.4.2): the configuration file has it encoded
+        self.__session_token: str = encode_resource_id(provisioning_session)
         self.rewrite_rules: List[Tuple[str,str]] = []
         # TS 26.512 V19.3.0 clauses 7.6.4.2, 7.6.4.5 and 7.6.4.6 and the domain name alias of TS 26.510 table 8.8.3.1-1
         self.caching_rules: List[Dict[str, Any]] = []
@@ -216,7 +218,7 @@ class OpenRestyLocationConfig(object):
         # is not served after the rules changed; a purge takes the part after the '|' as the provisioning session
         rules_digest = hashlib.sha1('\n'.join(f'{a}\t{b}' for (a, b) in self.rewrite_rules).encode('utf-8')).hexdigest()[:8]
         ret = f'''{prefix}  set $m4d_path $uri;
-{prefix}  set $m4d_key_prefix "{rules_digest}|{self.provisioning_session}";
+{prefix}  set $m4d_key_prefix "{rules_digest}|{self.__session_token}";
 {prefix}  set $downstream_prefix_url "{self.downstream_prefix_url}";
 {prefix}  set $location_prefix "{self.path_prefix}";
 '''
@@ -236,7 +238,7 @@ class OpenRestyLocationConfig(object):
         access = self.url_signature is not None or self.geo_fencing is not None or len(self.cors_aliases) > 0
         if access:
             ret += f'''{prefix}  access_by_lua_block {{
-{prefix}    local cfg = m4daccess.cfg("{self.provisioning_session}:{self.path_prefix}", {self.__lua_json()})
+{prefix}    local cfg = m4daccess.cfg("{self.__session_token}:{self.path_prefix}", {self.__lua_json()})
 {prefix}    if ngx.req.get_method() == "OPTIONS" and #cfg.cors > 0 then
 {prefix}      m4daccess.cors(cfg.cors)
 {prefix}      return ngx.exit(204)
@@ -254,9 +256,9 @@ class OpenRestyLocationConfig(object):
 '''
         if self.caching_rules_signal_ttl(rule):
             codes = ','.join(f'[{int(c)}]=true' for c in rule['statusCodes']) if rule['statusCodes'] else ''
-            ret += f'{prefix}    m4daccess.signal_ttl({int(rule["maxAge"])}, {{{codes}}}, "{self.provisioning_session}")\n'
+            ret += f'{prefix}    m4daccess.signal_ttl({int(rule["maxAge"])}, {{{codes}}}, "{self.__session_token}")\n'
         if len(self.cors_aliases) > 0:
-            ret += f'''{prefix}    local cfg = m4daccess.cfg("{self.provisioning_session}:{self.path_prefix}", {self.__lua_json()})
+            ret += f'''{prefix}    local cfg = m4daccess.cfg("{self.__session_token}:{self.path_prefix}", {self.__lua_json()})
 {prefix}    m4daccess.cors(cfg.cors)
 '''
         # with a query in the ingest baseURL: it is appended to the origin URL, except for a location that a redirect of the origin gave
@@ -326,7 +328,7 @@ class OpenRestyLocationConfig(object):
 {prefix}  }}
 {prefix}  log_by_lua_block {{
 {prefix}    -- the CMCD information of the request goes to the reporter of the AS (reference point M3d), if M3d is configured
-{prefix}    if m3d_cmcd then m3d_cmcd.forward("{self.provisioning_session}") end
+{prefix}    if m3d_cmcd then m3d_cmcd.forward("{self.__session_token}") end
 {prefix}  }}
 {prefix}  proxy_pass $downstream_prefix_url{proxy_query};
 {prefix}  proxy_intercept_errors on;
@@ -857,7 +859,7 @@ class OpenRestyWebProxy(WebProxyInterface):
         parts = key.split(':u=', 1)
         if len(parts) != 2:
             raise ValueError('cache key without a provisioning session: %r' % key)
-        return (parts[0].split('|', 1)[-1], parts[1])
+        return (decode_resource_id(parts[0].split('|', 1)[-1]), parts[1])
 
     @classmethod
     def __ensure_modules(cls, cmd):
