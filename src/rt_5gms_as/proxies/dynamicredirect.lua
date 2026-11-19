@@ -19,11 +19,28 @@ local function dynamicredirect_get(provisioning_session_prefix, upstream_prefix)
             return key
         end
     end
-    local redir_prefix = provisioning_session_prefix.."redir-"..uuid().."/"
-    dynamicredirect.set(redir_prefix, upstream_prefix)
-    return redir_prefix
+    local redir_prefix
+    for _ = 1, 16 do
+        redir_prefix = provisioning_session_prefix.."redir-"..uuid().."/"
+        -- add is atomic between the worker processes and fails for a name in use: an endpoint never leads to the target of another one
+        local ok, err = redir_map:add(redir_prefix, upstream_prefix, 120)
+        if ok or err ~= "exists" then
+            if not ok then
+                ngx.log(ngx.ERR, "dynamic redirect endpoint ", redir_prefix, " not stored: ", err)
+            end
+            return redir_prefix
+        end
+    end
+    error("no free name for a dynamic redirect endpoint")
 end
 dynamicredirect.get = dynamicredirect_get
+
+-- A worker process starts from the state of the random number generator that the master process had when it forked it, so every worker seeds it
+-- again: the same names for the endpoints of different redirects would otherwise be likely (TS 26.512 V19.3.0 clause 8.2)
+function dynamicredirect.seed()
+    math.randomseed(ngx.time() * 1000003 + ngx.worker.pid())
+end
+dynamicredirect.uuid = uuid
 
 local function dynamicredirect_set(m4_prefix, upstream_prefix)
     ngx.shared.dynredirmap:set(m4_prefix, upstream_prefix, 120)

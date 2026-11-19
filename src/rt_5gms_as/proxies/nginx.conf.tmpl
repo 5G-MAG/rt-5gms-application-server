@@ -91,6 +91,7 @@ http {{
   }}
 
   init_worker_by_lua_block {{
+    dynredir.seed()
     package.loaded["cmcd_response_json"] = nil
     cmcd_response = require "cmcd_response_json"
   }}
