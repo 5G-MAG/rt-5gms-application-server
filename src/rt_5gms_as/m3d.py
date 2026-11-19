@@ -299,7 +299,12 @@ class ReportConfig(object):
         return crossed, seen
 
     def url_wanted(self, url: str) -> bool:
-        '''urlFilters: regular expressions of the request URLs to report; without them all are reported'''
+        '''urlFilters: regular expressions of the request URLs to report; without them all are reported
+
+        Implementation choice, text silent, see AS audit O-14 (no CR): TS 26.510 clause 8.11.3.1 speaks of Media Entry Point URL patterns and does not say
+        how the AS knows the entry point of a media delivery session, so the pattern is searched in the URL of each request of the session and only
+        the requests that match are reported (a session is not marked as wanted by its first request: nothing in the text says that it is the entry point).
+        '''
         if not self.url_filters:
             return True
         for pattern in self.url_filters:
