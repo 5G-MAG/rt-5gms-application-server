@@ -31,7 +31,7 @@ import logging
 import os
 import os.path
 import re
-from urllib.parse import urlparse
+from urllib.parse import urlparse, unquote
 import sys
 from typing import Optional
 
@@ -43,6 +43,12 @@ from .openapi_5g.models.application_server_content_hosting_configuration import 
 # TS 26.512 V19.3.0 table 8.1-1: the content ingest protocols that this AS realises (clauses 8.2 and 8.4)
 INGEST_PULL_PROTOCOLS = ('urn:3gpp:5gms:content-protocol:http-pull', 'urn:3gpp:5gms:content-protocol:http-pull-ingest')
 INGEST_LOW_LATENCY_PULL_PROTOCOL = 'urn:3gpp:5gms:content-protocol:http-ll-pull'
+# the DASH-IF push-based content ingest protocol (clause 8.3): interface 1 (CMAF ingest) or 2 (DASH and HLS ingest) of the DASH-IF Live Media Ingest
+# specification, or the deprecated term identifier, which does not say which of the two
+INGEST_PUSH_INTERFACE_1 = 'http://dashif.org/ingest/v1.2/interface-1'
+INGEST_PUSH_INTERFACE_2 = 'http://dashif.org/ingest/v1.2/interface-2'
+INGEST_PUSH_DEPRECATED = 'urn:3gpp:5gms:content-protocol:dash-if-ingest'
+INGEST_PUSH_PROTOCOLS = (INGEST_PUSH_INTERFACE_1, INGEST_PUSH_INTERFACE_2, INGEST_PUSH_DEPRECATED)
 
 def wrapped_default(self, obj):
     return getattr(obj.__class__, "__jsontype__", getattr(obj.__class__, "__str__", wrapped_default.default))(obj)
@@ -62,6 +68,9 @@ certificates_cache = /var/cache/rt-5gms/as/certificates
 # The identifiers of destroyed resources are kept in this file, so that a destroyed identifier cannot be used again after
 # a restart (TS 26.512 clauses 4.5.2.3 and 4.5.4.3); by default destroyed-resources.json in the directory above certificates_cache
 # destroyed_resources_file = /var/cache/rt-5gms/as/destroyed-resources.json
+# The objects pushed to the AS by DASH-IF ingest are stored here, below one directory for each Content Hosting Configuration; by default
+# ingest in the directory above certificates_cache. The nginx worker processes write to it, so it has to be writable by their user.
+# ingest_dir = /var/cache/rt-5gms/as/ingest
 # The longest time in seconds that matching one cache entry against the regular expression of a purge request may take; a
 # pattern that exceeds it is refused with 400
 purge_regex_timeout = 1.0
@@ -399,6 +408,17 @@ class Context(object):
         '''
         return self.__delCertificate(certificate_id)
 
+    def ingestDir(self):
+        '''
+        Get the directory in which the objects pushed by DASH-IF ingest (TS 26.512 V19.3.0 clause 8.3) are stored
+
+        The option ingest_dir of the section 5gms_as, by default ingest in the directory above certificates_cache.
+        '''
+        name = self.__config.get('5gms_as', 'ingest_dir', fallback=None)
+        if not name:
+            name = os.path.join(os.path.dirname(self.certificatesCacheDir().rstrip(os.sep)), 'ingest')
+        return name
+
     def certificatesCacheDir(self):
         '''
         Get the certificates caching directory
@@ -463,9 +483,17 @@ class Context(object):
             raise Context.ValueError('ContentHostingConfiguration must have an ingestConfiguration', 'ingestConfiguration')
         if chc.distribution_configurations is None or not hasattr(chc.distribution_configurations, '__iter__'):
             raise Context.ValueError('ContentHostingConfiguration must have a distributionConfigurations array', 'distributionConfigurations')
-        # What the web proxy can realise: pull ingest over HTTP, also the low-latency one (TS 26.512 table 8.1-1; the second URN of the first is deprecated)
-        if chc.ingest_configuration.mode != 'PULL' or chc.ingest_configuration.protocol not in INGEST_PULL_PROTOCOLS + (INGEST_LOW_LATENCY_PULL_PROTOCOL,):
-            raise Context.ConfigError('This 5GMS AS can only ingest content by HTTP pull (mode PULL, protocol urn:3gpp:5gms:content-protocol:http-pull or http-ll-pull)')
+        # What the web proxy can realise: pull ingest over HTTP, also the low-latency one, and the DASH-IF push ingest (TS 26.512 table 8.1-1; the
+        # second URN of the first and the third of the push protocol are deprecated)
+        pull = chc.ingest_configuration.protocol in INGEST_PULL_PROTOCOLS + (INGEST_LOW_LATENCY_PULL_PROTOCOL,)
+        push = chc.ingest_configuration.protocol in INGEST_PUSH_PROTOCOLS
+        if not (pull or push):
+            raise Context.ConfigError('This 5GMS AS can only ingest content by HTTP pull (mode PULL, protocol urn:3gpp:5gms:content-protocol:http-pull or http-ll-pull) or by the DASH-IF push protocol (mode PUSH, protocol http://dashif.org/ingest/v1.2/interface-1 or interface-2)')
+        if (chc.ingest_configuration.mode == 'PUSH') != push or chc.ingest_configuration.mode not in ('PULL', 'PUSH'):
+            # clauses 8.2 to 8.4: the mode is PULL for the pull protocols and PUSH (clause 8.3) for the push protocol
+            raise Context.ValueError('The mode of an ingest by %s has to be %s' % (chc.ingest_configuration.protocol, 'PUSH' if push else 'PULL'), 'ingestConfiguration.mode')
+        if push:
+            self.__checkPushIngest(chc)
         # The values below end up in the web proxy configuration: only what cannot change its structure is accepted
         self.__checkProxySafeValues(chc)
         # TS 26.512 clause 4.5.4.3: an invalid reference to another resource fails the operation with 400
@@ -510,6 +538,32 @@ class Context(object):
         except re.error:
             return False
         return True
+
+    # the characters of the path of a push ingest baseURL once decoded (it is written between quotation marks into the web proxy configuration)
+    __PUSH_PATH = re.compile(r"^[A-Za-z0-9._~/:@+=,!&()*'-]*$")
+
+    def __checkPushIngest(self, chc):
+        '''Check the ingest baseURL of a push ingest (TS 26.512 V19.3.0 clause 8.3): the URL at which this AS receives the objects
+
+        Raises Context.ValueError (400) if it cannot name an endpoint and Context.ConfigError (500) for what the text leaves this AS no way to realise.
+        '''
+        if chc.ingest_configuration.base_url is None:
+            # clause 8.3: the 5GMSd AF sets the ingest baseURL
+            raise Context.ValueError('The ingest baseURL of a push ingest has to be set by the 5GMSd AF', 'ingestConfiguration.baseURL')
+        base = urlparse(str(chc.ingest_configuration.base_url))
+        if base.query or '?' in str(chc.ingest_configuration.base_url):
+            raise Context.ConfigError('This 5GMS AS cannot realise a push ingest baseURL with a query')
+        if base.scheme != 'http':
+            # TS 26.512 clause 6.2.1.2 needs TLS, but no text says which Server Certificate the AS presents for the host name of an ingest baseURL
+            raise Context.ConfigError('This 5GMS AS can only realise a push ingest baseURL that uses http: no text names the Server Certificate for the ingest host')
+        path = unquote(base.path or '/')
+        if self.__PUSH_PATH.match(path) is None or not path.startswith('/') or any(seg in ('.', '..') for seg in path.split('/')) or '//' in path:
+            raise Context.ValueError('The path of a push ingest baseURL has to be made of plain segments (no empty, dot or dot-dot segment)', 'ingestConfiguration.baseURL')
+
+    @classmethod
+    def isPushIngest(cls, chc) -> bool:
+        '''Whether the Content Hosting Configuration ingests by the DASH-IF push protocol (clause 8.3)'''
+        return chc.ingest_configuration.mode == 'PUSH' and chc.ingest_configuration.protocol in INGEST_PUSH_PROTOCOLS
 
     def __checkProxySafeValues(self, chc):
         '''Check the values of a ContentHostingConfiguration that are written into the web proxy configuration

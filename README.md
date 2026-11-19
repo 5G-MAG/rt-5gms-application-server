@@ -26,7 +26,8 @@ reference point.
 
 This implementation is comprised of a small Python daemon process which implements the 5GMS AS configuration service at
 reference poont M3,
-and which also manages an external HTTP(S) Web Server/Proxy daemon subprocess to ingest content (pull ingest only) at
+and which also manages an external HTTP(S) Web Server/Proxy daemon subprocess to ingest content (HTTP pull and low-latency pull,
+and DASH-IF push over plain HTTP) at
 reference point M2d
 and serve it to 5GMSd Clients at reference point M4d.
 

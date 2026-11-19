@@ -39,11 +39,11 @@ import subprocess
 import traceback
 
 from typing import Dict, Optional, Tuple, List, Any, Set
-from urllib.parse import urlparse
+from urllib.parse import urlparse, unquote
 
 from ..proxy_factory import WebProxyInterface, add_web_proxy
 from ..utils import find_executable_on_path, traverse_directory_tree, encode_resource_id, decode_resource_id
-from ..context import Context, INGEST_PULL_PROTOCOLS, INGEST_LOW_LATENCY_PULL_PROTOCOL
+from ..context import Context, INGEST_PULL_PROTOCOLS, INGEST_LOW_LATENCY_PULL_PROTOCOL, INGEST_PUSH_INTERFACE_1
 from .. import m3d
 
 class OpenRestyLocationConfig(object):
@@ -76,8 +76,13 @@ class OpenRestyLocationConfig(object):
             self.path_prefix = '/' + self.path_prefix
         if self.path_prefix[-1] != '/':
             self.path_prefix += '/'
-        if self.downstream_prefix_url[-1] != '/':
+        if self.downstream_prefix_url and self.downstream_prefix_url[-1] != '/':
             self.downstream_prefix_url += '/'
+
+    @property
+    def session_token(self) -> str:
+        '''The identifier of the provisioning session as written into the configuration file'''
+        return self.__session_token
 
     @staticmethod
     def safe_pattern(pattern: str) -> bool:
@@ -212,6 +217,29 @@ class OpenRestyLocationConfig(object):
                 ret += f'{prefix}  proxy_cache_valid {codes} 10y;\n'
         return ret
 
+    def _access_json(self) -> str:
+        return self.__lua_json()
+
+    def _access_phase(self, prefix: str) -> str:
+        '''The access phase of the location: the CORS preflight of the domain name alias, the URL signature and the geofence (clauses 7.6.4.5 and 7.6.4.6)'''
+        ret = ''
+        if self.url_signature is not None or self.geo_fencing is not None or len(self.cors_aliases) > 0:
+            ret += f'''{prefix}  access_by_lua_block {{
+{prefix}    local cfg = m4daccess.cfg("{self.__session_token}:{self.path_prefix}", {self.__lua_json()})
+{prefix}    if ngx.req.get_method() == "OPTIONS" and #cfg.cors > 0 then
+{prefix}      m4daccess.cors(cfg.cors)
+{prefix}      return ngx.exit(204)
+{prefix}    end
+{prefix}    if cfg.signature and not m4daccess.verify_signature(cfg.signature) then
+{prefix}      return ngx.exit(ngx.HTTP_FORBIDDEN)
+{prefix}    end
+{prefix}    if cfg.geo and not m4daccess.check_geo(cfg.geo, "{self.__context.getConfigVar('5gms_as', 'geo_ranges_file', '')}") then
+{prefix}      return ngx.exit(ngx.HTTP_FORBIDDEN)
+{prefix}    end
+{prefix}  }}
+'''
+        return ret
+
     def __location_body(self, prefix: str, rule: Optional[Dict[str, Any]]) -> str:
         '''The directives of the location, with those of the caching rule if there is one'''
         # the cache key holds the request path as the M4d client sent it, so that the pattern of a purge request (TS 26.512 V19.3.0 clause 4.5.4.9,
@@ -242,22 +270,7 @@ class OpenRestyLocationConfig(object):
         # CMCD data is for the collector of the AS and not for the origin (M2d): its request headers are not passed on
         for hdr in ('CMCD', 'CMCD-Request', 'CMCD-Object', 'CMCD-Status', 'CMCD-Session'):
             ret += f'{prefix}  proxy_set_header {hdr} "";\n'
-        access = self.url_signature is not None or self.geo_fencing is not None or len(self.cors_aliases) > 0
-        if access:
-            ret += f'''{prefix}  access_by_lua_block {{
-{prefix}    local cfg = m4daccess.cfg("{self.__session_token}:{self.path_prefix}", {self.__lua_json()})
-{prefix}    if ngx.req.get_method() == "OPTIONS" and #cfg.cors > 0 then
-{prefix}      m4daccess.cors(cfg.cors)
-{prefix}      return ngx.exit(204)
-{prefix}    end
-{prefix}    if cfg.signature and not m4daccess.verify_signature(cfg.signature) then
-{prefix}      return ngx.exit(ngx.HTTP_FORBIDDEN)
-{prefix}    end
-{prefix}    if cfg.geo and not m4daccess.check_geo(cfg.geo, "{self.__context.getConfigVar('5gms_as', 'geo_ranges_file', '')}") then
-{prefix}      return ngx.exit(ngx.HTTP_FORBIDDEN)
-{prefix}    end
-{prefix}  }}
-'''
+        ret += self._access_phase(prefix)
         ret += f'''{prefix}  header_filter_by_lua_block {{
 {prefix}    m4daccess.filter_origin_headers()
 '''
@@ -412,6 +425,139 @@ class OpenRestyLocationConfig(object):
 
         return (rule_regex, replace)
 
+class OpenRestyPushLocationConfig(OpenRestyLocationConfig):
+    '''
+    An M4d service location that distributes the objects received by DASH-IF push ingest (TS 26.512 V19.3.0 clause 8.3)
+
+    The objects are the files below the store directory of the distribution configuration. The access rules (URL signature, geofence, CORS)
+    and the caching directives of the distribution configuration apply as for a location that pulls from an origin.
+    '''
+    def __init__(self, context: Context, path_prefix: str, provisioning_session: str, store_dir: str):
+        super().__init__(context, path_prefix, '', provisioning_session)
+        self.store_dir: str = store_dir
+
+    def __eq__(self, other: "OpenRestyLocationConfig") -> bool:
+        return type(other) is type(self) and self.store_dir == other.store_dir and super().__eq__(other)
+
+    def __lua_rules(self) -> str:
+        '''The caching rules of the location as a Lua long string, for the first of them whose urlPatternFilter matches'''
+        rules = []
+        for rule in self.caching_rules:
+            pattern = rule['pattern']
+            if pattern.startswith('^'):
+                # as for a location that pulls: a pattern that starts with ^ starts at the service location
+                pattern = '^' + regex.escape(self.path_prefix[:-1]) + pattern[1:]
+            entry: Dict[str, Any] = {'pattern': pattern, 'noCache': rule['noCache']}
+            if rule['maxAge'] is not None:
+                entry['maxAge'] = int(rule['maxAge'])
+            if rule['statusCodes']:
+                entry['codes'] = {str(int(c)): True for c in rule['statusCodes']}
+            rules.append(entry)
+        text = json.dumps(rules)
+        assert ']==]' not in text
+        return '[==[' + text + ']==]'
+
+    async def config(self, indent: int = 0) -> str:
+        prefix = ' ' * indent
+        allowed_methods = ['GET', 'HEAD'] + (['OPTIONS'] if len(self.cors_aliases) > 0 else [])
+        method_test = ' and '.join(f'method ~= "{m}"' for m in allowed_methods)
+        ret = f'''{prefix}location {self.path_prefix} {{
+{prefix}  alias {self.store_dir}/;
+{prefix}  # a directory is not an object: no redirect to its name with a slash
+{prefix}  if (-d $request_filename) {{
+{prefix}    return 404;
+{prefix}  }}
+'''
+        ret += self._access_phase(prefix)
+        ret += f'''{prefix}  rewrite_by_lua_block {{
+{prefix}    local method = ngx.req.get_method()
+{prefix}    if {method_test} then
+{prefix}      ngx.header["Allow"] = "{', '.join(allowed_methods)}"
+{prefix}      return ngx.exit(405)
+{prefix}    end
+{prefix}    -- a directory is not an object
+{prefix}    local uri = ngx.var.uri
+{prefix}    if uri:sub(-1) == "/" then
+{prefix}      return ngx.exit(404)
+{prefix}    end
+{prefix}    -- Execute CMCD handler per request
+{prefix}    if uri:find("%.m4s$") or uri:find("%.mp4$") or uri:find("%.m4v$") or uri:find("%.m4a$") or uri:find("%.mpd$") then
+{prefix}      if cmcd_response and cmcd_response.reportToDashboard then
+{prefix}        local ok, err = pcall(cmcd_response.reportToDashboard)
+{prefix}        if not ok then
+{prefix}          ngx.log(ngx.ERR, "[cmcd] reportToDashboard() failed: ", err)
+{prefix}        end
+{prefix}      end
+{prefix}    end
+{prefix}  }}
+{prefix}  header_filter_by_lua_block {{
+{prefix}    pushingest.response(pushingest.cfg("{self.session_token}:{self.path_prefix}:rules", {self.__lua_rules()}))
+'''
+        if len(self.cors_aliases) > 0:
+            ret += f'''{prefix}    local cfg = m4daccess.cfg("{self.session_token}:{self.path_prefix}", {self._access_json()})
+{prefix}    m4daccess.cors(cfg.cors)
+'''
+        ret += f'''{prefix}  }}
+{prefix}  log_by_lua_block {{
+{prefix}    -- the CMCD information of the request goes to the reporter of the AS (reference point M3d), if M3d is configured
+{prefix}    if m3d_cmcd then m3d_cmcd.forward("{self.session_token}") end
+{prefix}  }}
+{prefix}}}
+'''
+        return ret
+
+class OpenRestyPushIngestConfig(object):
+    '''
+    The ingest endpoint of a Content Hosting Configuration with push-based content ingest (TS 26.512 V19.3.0 clause 8.3)
+
+    The location is the ingest baseURL that the 5GMSd AF set; it receives the HTTP POST and PUT requests (and DELETE for interface 2) of the
+    DASH-IF Live Media Ingest specification and stores the objects for each distribution configuration (see pushingest.lua).
+    '''
+    def __init__(self, context: Context, path_prefix: str, provisioning_session: str, store_dir: str, allow_delete: bool):
+        self.__context: Context = context
+        self.path_prefix: str = path_prefix if path_prefix.startswith('/') else '/' + path_prefix
+        if not self.path_prefix.endswith('/'):
+            self.path_prefix += '/'
+        self.provisioning_session: str = provisioning_session
+        self.store_dir: str = store_dir
+        # DASH-IF Live Media Ingest, clause 7.1.1: the HTTP DELETE method belongs to interface 2
+        self.allow_delete: bool = allow_delete
+        # the directory of the objects of each distribution configuration with its path rewrite rules (in the form for the whole request path)
+        self.distributions: List[Dict[str, Any]] = []
+
+    def addDistribution(self, directory: str, rules: List[Tuple[str, str]]) -> None:
+        self.distributions.append({'dir': directory, 'rules': [[a, b] for (a, b) in rules]})
+
+    def status_maps(self) -> Dict[str, str]:
+        return {}
+
+    def __eq__(self, other: Any) -> bool:
+        return type(other) is type(self) and self.path_prefix == other.path_prefix and self.provisioning_session == other.provisioning_session \
+            and self.store_dir == other.store_dir and self.allow_delete == other.allow_delete and self.distributions == other.distributions
+
+    def __ne__(self, other: Any) -> bool:
+        return not self == other
+
+    async def config(self, indent: int = 0) -> str:
+        prefix = ' ' * indent
+        tmp = os.path.join(self.store_dir, '.tmp')
+        text = json.dumps({'prefix': self.path_prefix, 'tmp': tmp, 'delete': self.allow_delete, 'distributions': self.distributions})
+        assert ']==]' not in text
+        token = encode_resource_id(self.provisioning_session)
+        body = f'''{prefix}  client_max_body_size 0;
+{prefix}  client_body_temp_path "{tmp}";
+{prefix}  content_by_lua_block {{
+{prefix}    pushingest.handle(pushingest.cfg("{token}:{self.path_prefix}", [==[{text}]==]))
+{prefix}  }}
+{prefix}}}
+'''
+        ret = ''
+        if len(self.path_prefix) > 1:
+            # the publishing point URL itself, without the closing slash (DASH-IF Live Media Ingest, clause 6.2: the first request goes to it)
+            ret += f'{prefix}location = "{self.path_prefix[:-1]}" {{\n' + body
+        ret += f'{prefix}location "{self.path_prefix}" {{\n' + body
+        return ret
+
 class OpenRestyServerConfig(object):
     '''
     Class to hold and compare server configurations
@@ -468,6 +614,9 @@ class OpenRestyServerConfig(object):
         for locn in self.locations.values():
             ret += await locn.config(indent+2)
             ret += '\n'
+        if self.locations and '/' not in self.locations and all(isinstance(locn, OpenRestyPushIngestConfig) for locn in self.locations.values()):
+            # DASH-IF Live Media Ingest, clauses 5.3 and 7.1.2: a request for a path other than the ingest baseURL or below it is refused with 403
+            ret += f'{prefix}  location / {{\n{prefix}    return 403;\n{prefix}  }}\n\n'
         ret += f'''{prefix}  location @handle_redirect {{
 {prefix}    rewrite_by_lua_block {{
 {prefix}      -- ngx.log(ngx.DEBUG,"rewrite_by_lua_block(",ngx.var.upstream_http_location,",",ngx.var.location_prefix,",",ngx.var.upstream_status,")")
@@ -634,6 +783,12 @@ class OpenRestyWebProxy(WebProxyInterface):
             cache_inactive = self._context.getConfigVar('5gms_as', 'cache_inactive', '30d')
             proxy_cache_path_directive = 'proxy_cache_path %s levels=1:2 use_temp_path=on keys_zone=cacheone:10m inactive=%s;'%(proxy_cache_path, cache_inactive)
 
+        # DASH-IF Live Media Ingest clause 5.3, point 5a: a publishing point that is not available (a host name that has none, or a deactivated
+        # Content Hosting Configuration) gets 404 for the methods of the protocol that the static default server would refuse with 405
+        default_server_extra = ''
+        if any(Context.isPushIngest(self._context.findContentHostingConfigurationByProvisioningSession(psid)) for psid in self._context.getProvisioningSessionIds()):
+            default_server_extra = '    if ($request_method ~ ^(PUT|DELETE)$) {\n      return 404;\n    }\n'
+
         # Create the server configurations from the CHCs
         server_configs: Dict[Tuple[str,Optional[str]], OpenRestyServerConfig] = {}
         for provisioning_session_id in self._context.getProvisioningSessionIds():
@@ -641,8 +796,9 @@ class OpenRestyWebProxy(WebProxyInterface):
                 # a deactivated Content Hosting Configuration stays configured but is not served at M4 (TS 26.512 clause 4.5.4.7)
                 continue
             i = self._context.findContentHostingConfigurationByProvisioningSession(provisioning_session_id)
-            if i.ingest_configuration.mode != 'PULL' or i.ingest_configuration.protocol not in INGEST_PULL_PROTOCOLS + (INGEST_LOW_LATENCY_PULL_PROTOCOL,):
-                self.log.error("Can only handle http-pull sources at present")
+            push = Context.isPushIngest(i)
+            if not push and (i.ingest_configuration.mode != 'PULL' or i.ingest_configuration.protocol not in INGEST_PULL_PROTOCOLS + (INGEST_LOW_LATENCY_PULL_PROTOCOL,)):
+                self.log.error("Can only handle http-pull and DASH-IF push sources at present")
                 return False
             downstream_origin = i.ingest_configuration.base_url
             if downstream_origin is None:
@@ -654,6 +810,18 @@ class OpenRestyWebProxy(WebProxyInterface):
             downstream_origin, _, downstream_query = downstream_origin.partition('?')
             if downstream_origin[-1] == '/':
                 downstream_origin = downstream_origin[:-1]
+            if push:
+                # TS 26.512 V19.3.0 clause 8.3: this AS is the receiving entity at the ingest baseURL that the 5GMSd AF set; its host name gets a server
+                # of its own (as the host of the baseURL says), on the HTTP port like the M4d locations that have no Server Certificate
+                token = encode_resource_id(provisioning_session_id)
+                chc_dir = os.path.join(self._context.ingestDir(), token)
+                ingest_url = urlparse(str(i.ingest_configuration.base_url))
+                ingest_key = (ingest_url.hostname, None)
+                if ingest_key not in server_configs:
+                    server_configs[ingest_key] = OpenRestyServerConfig(self._context, {ingest_url.hostname}, proxy_cache_path is not None, None)
+                ingest = OpenRestyPushIngestConfig(self._context, unquote(ingest_url.path or '/'), provisioning_session_id, chc_dir,
+                                                   i.ingest_configuration.protocol != INGEST_PUSH_INTERFACE_1)
+                os.makedirs(chc_dir, mode=0o755, exist_ok=True)
             for dc in i.distribution_configurations:
                 # TS 26.510 V19.2.0 table 8.8.3.3-1: content distributed exclusively via a supplementary network is not available at M4
                 if any(n.distribution_mode == 'MODE_EXCLUSIVE' for n in dc.supplementary_distribution_networks or []):
@@ -674,12 +842,25 @@ class OpenRestyWebProxy(WebProxyInterface):
                     m4d_path_prefix = '/' + m4d_path_prefix
                 if m4d_path_prefix[-1] != '/':
                     m4d_path_prefix += '/'
-                locn = OpenRestyLocationConfig(self._context, m4d_path_prefix, downstream_origin, provisioning_session_id, downstream_query,
-                                               i.ingest_configuration.protocol == INGEST_LOW_LATENCY_PULL_PROTOCOL)
-                if dc.path_rewrite_rules is not None:
-                    for rr in dc.path_rewrite_rules:
-                        if not locn.addRewriteRule(rr.request_path_pattern, rr.mapped_path):
+                if push:
+                    # the objects of this distribution configuration are the files below its directory, put there by the ingest endpoint
+                    dist_dir = os.path.join(chc_dir, 'dist-' + encode_resource_id(dc.distribution_id))
+                    os.makedirs(dist_dir, mode=0o755, exist_ok=True)
+                    # TS 26.510 table 8.8.3.1-1: for push-based ingest the rules compare the upload request path (as for the pull rules: the path
+                    # after the baseURL of the endpoint) and the mapped path is the path of the distribution URL
+                    rules_locn = OpenRestyLocationConfig(self._context, ingest.path_prefix, '', provisioning_session_id)
+                    for rr in dc.path_rewrite_rules or []:
+                        if not rules_locn.addRewriteRule(rr.request_path_pattern, rr.mapped_path):
                             return False
+                    ingest.addDistribution(dist_dir, rules_locn.rewrite_rules)
+                    locn = OpenRestyPushLocationConfig(self._context, m4d_path_prefix, provisioning_session_id, dist_dir)
+                else:
+                    locn = OpenRestyLocationConfig(self._context, m4d_path_prefix, downstream_origin, provisioning_session_id, downstream_query,
+                                                   i.ingest_configuration.protocol == INGEST_LOW_LATENCY_PULL_PROTOCOL)
+                    if dc.path_rewrite_rules is not None:
+                        for rr in dc.path_rewrite_rules:
+                            if not locn.addRewriteRule(rr.request_path_pattern, rr.mapped_path):
+                                return False
                 for cc in dc.caching_configurations or []:
                     if not locn.addCachingRule(cc.url_pattern_filter, cc.caching_directives.no_cache, cc.caching_directives.max_age, cc.caching_directives.status_code_filters):
                         return False
@@ -692,6 +873,8 @@ class OpenRestyWebProxy(WebProxyInterface):
                 server_configs[sk].addLocation(locn)
                 if dc.domain_name_alias is not None:
                     server_configs[dsk].addLocation(locn)
+            if push:
+                server_configs[ingest_key].addLocation(ingest)
         changed = True
         while changed:
             changed = False
@@ -823,6 +1006,12 @@ class OpenRestyWebProxy(WebProxyInterface):
                 return True
             await asyncio.sleep(0.05)
         return False
+
+    async def purgeAll(self, provisioningSessionId: str) -> int:
+        '''Purge all cache entries for the provisioning session and remove the objects that were pushed to it (TS 26.512 V19.3.0 clause 4.5.4.6)'''
+        purged = await super().purgeAll(provisioningSessionId)
+        shutil.rmtree(os.path.join(self._context.ingestDir(), encode_resource_id(provisioningSessionId)), ignore_errors=True)
+        return purged
 
     async def _getCacheFilesAndKeys(self) -> List[Tuple[str,str,str]]:
         self._context.appLog().debug('Getting NGINX cache entries...')

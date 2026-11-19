@@ -95,7 +95,7 @@ class Origin(object):
 
 class Proxy(object):
     '''The nginx of the AS for the given Content Hosting Configurations (dictionaries, as in the JSON of the M3 API), on a port of its own'''
-    def __init__(self, chcs, extra_config=''):
+    def __init__(self, chcs, extra_config='', deactivated=()):
         self.dir = tempfile.mkdtemp(prefix='as-test-')
         self.port = free_port()
         config = os.path.join(self.dir, 'as.conf')
@@ -107,6 +107,8 @@ class Proxy(object):
         self.context.setAppLog(logging.getLogger('test'))
         for name, chc in chcs.items():
             self.context.addContentHostingConfiguration(name, CHC.model_validate(chc))
+        for name in deactivated:
+            self.context.setContentHostingConfigurationActive(name, False)
         asyncio.run(OpenRestyWebProxy(self.context).writeConfiguration())
         self.process = subprocess.Popen([OPENRESTY, '-p', self.dir + '/', '-c', os.path.join(self.dir, 'nginx.conf'), '-g', 'daemon off;'],
                                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
@@ -132,6 +134,18 @@ class Proxy(object):
         body = response.read()
         conn.close()
         return response.status, {k.lower(): v for k, v in response.getheaders()}, body
+
+    def send(self, method, host, path, body=None, headers=None, chunks=None):
+        '''(status, header fields in lower case, body) of a request with a body, sent in the chunks of HTTP/1.1 chunked transfer coding if given'''
+        conn = self.connection()
+        if chunks is not None:
+            conn.request(method, path, body=iter(chunks), headers=dict({'Host': host, 'Transfer-Encoding': 'chunked'}, **(headers or {})), encode_chunked=True)
+        else:
+            conn.request(method, path, body=body, headers=dict({'Host': host}, **(headers or {})))
+        response = conn.getresponse()
+        data = response.read()
+        conn.close()
+        return response.status, {k.lower(): v for k, v in response.getheaders()}, data
 
     def stop(self):
         self.process.terminate()

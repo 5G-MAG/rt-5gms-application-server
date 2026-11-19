@@ -67,6 +67,7 @@ http {{
   
     dynredir = require "dynamicredirect"
     m4daccess = require "m4daccess"
+    pushingest = require "pushingest"
     m3d_cmcd = require "cmcd_samples"
     m3d_cmcd.configure("{m3d_samples_socket}")
 	
@@ -103,7 +104,7 @@ http {{
     listen       [::]:{http_port} default_server;
     server_name  _;
     root         /usr/share/nginx/html;
-    error_page 404 /404.html;
+{default_server_extra}    error_page 404 /404.html;
     location = /404.html {{
     }}
     error_page 500 502 503 504 /50x.html;
