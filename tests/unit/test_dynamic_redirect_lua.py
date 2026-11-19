@@ -88,11 +88,14 @@ class RedirectTarget(unittest.TestCase):
         self.assertEqual(self.split('http://h.example/other/dir/'), ['http://h.example/other/', 'dir/'])
         self.assertEqual(self.split('http://h.example'), ['http://h.example/', ''])
 
-    def test_the_endpoint_hands_the_query_of_the_request_to_the_target(self):
-        self.assertEqual(run_lua('print(d.target_query("sig=abc"))'), ['?sig=abc'])
-        # what the CMCD handler removed can leave a separator at the start
-        self.assertEqual(run_lua('print(d.target_query("&b=2"))'), ['?b=2'])
-        self.assertEqual(run_lua('print("[" .. d.target_query("") .. "]")\nprint("[" .. d.target_query(nil) .. "]")'), ['[]', '[]'])
+    def test_the_query_of_the_request_is_cleaned_for_the_origin_and_for_the_cache_key(self):
+        self.assertEqual(run_lua('print(d.query("sig=abc&b=2"))'), ['sig=abc&b=2'])
+        # what the CMCD handler of the location removed can leave a separator or an empty parameter
+        self.assertEqual(run_lua('print(d.query("&b=2&&c="))'), ['b=2&c='])
+        # the parameters named in the second argument are left out
+        self.assertEqual(run_lua('print(d.query("exp=1&a=b&tok=x&tokx=1", {"tok", "exp"}))'), ['a=b&tokx=1'])
+        self.assertEqual(run_lua('print("[" .. d.query("") .. "]")\nprint("[" .. d.query(nil) .. "]")'), ['[]', '[]'])
+        self.assertEqual(run_lua('print(d.suffix("a=1") .. "|" .. d.suffix(""))'), ['?a=1|'])
 
     def test_the_map_tells_whether_the_location_is_an_endpoint_of_a_redirect(self):
         out = run_lua('''
@@ -155,8 +158,7 @@ class RedirectConfiguration(unittest.TestCase):
             with open(os.path.join(d, 'nginx.conf')) as fh:
                 text = fh.read()
             self.assertIn('ngx.ctx.redirected = dynredir.mapUrl(', text)
-            self.assertIn('if ngx.ctx.redirected then\n', text)
-            self.assertIn('ngx.var.downstream_prefix_url = ngx.var.downstream_prefix_url..dynredir.target_query(ngx.var.args)', text)
+            self.assertIn('ngx.var.downstream_prefix_url = ngx.var.downstream_prefix_url..dynredir.suffix(query)', text)
             self.assertIn('dynredir.split_location(ngx.var.upstream_http_location, ngx.var.downstream_prefix_url)', text)
             run = subprocess.run([OPENRESTY, '-t', '-c', os.path.join(d, 'nginx.conf'), '-p', d + '/'], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
             self.assertEqual(run.returncode, 0, run.stdout)

@@ -261,6 +261,9 @@ class OpenRestyLocationConfig(object):
 '''
         # with a query in the ingest baseURL: it is appended to the origin URL, except for a location that a redirect of the origin gave
         origin_prefix = map_query = proxy_query = ''
+        forward_query = f'{prefix}    ngx.var.downstream_prefix_url = ngx.var.downstream_prefix_url..dynredir.suffix(query)\n'
+        # the names of the parameters of the URL signature are the proof for the AS (clause 7.6.4.5)
+        key_drop = ', {' + ', '.join(json.dumps(n) for n in (self.url_signature['tokenName'], self.url_signature['tokenExpiryName'])) + '}' if self.url_signature else ''
         if self.downstream_query:
             origin_prefix = f'{prefix}    local origin_prefix = ngx.var.downstream_prefix_url\n'
             map_query = f'''
@@ -268,6 +271,15 @@ class OpenRestyLocationConfig(object):
 {prefix}      ngx.var.downstream_query = "?"..ngx.var.downstream_base_query
 {prefix}    end'''
             proxy_query = '$downstream_query'
+            # the query of the baseURL comes first; a request to the endpoint of a redirect has the query of its target only
+            forward_query = f'''{prefix}    if query ~= "" then
+{prefix}      if ngx.ctx.redirected then
+{prefix}        ngx.var.downstream_prefix_url = ngx.var.downstream_prefix_url.."?"..query
+{prefix}      else
+{prefix}        ngx.var.downstream_query = ngx.var.downstream_query.."&"..query
+{prefix}      end
+{prefix}    end
+'''
         # TS 26.512 V19.3.0 clause 4.6: a request that cannot be served from the cache is transformed into a GET request to the origin, so only
         # GET and HEAD reach it (and the CORS preflight of the aliases, which the access phase answers)
         allowed_methods = ['GET', 'HEAD'] + (['OPTIONS'] if len(self.cors_aliases) > 0 else [])
@@ -305,10 +317,12 @@ class OpenRestyLocationConfig(object):
 {prefix}    if args then
 {prefix}      ngx.var.args = ngx.re.gsub(args, "(^|&)CMCD=[^&]*", "", "jo")
 {prefix}    end
-{prefix}    -- clause 8.2: a request to the endpoint of a redirect of the origin goes to the target of the redirect, with its query
-{prefix}    if ngx.ctx.redirected then
-{prefix}      ngx.var.downstream_prefix_url = ngx.var.downstream_prefix_url..dynredir.target_query(ngx.var.args)
-{prefix}    end
+{prefix}    -- clause 8.2: the prefix of the request URL is replaced, so the query goes to the origin (a request to the endpoint of a redirect carries the
+{prefix}    -- query of the target of the redirect); the CMCD parameter is removed above (clause 8.1)
+{prefix}    local query = dynredir.query(ngx.var.args)
+{forward_query}{prefix}    -- clause 10.1: a transport resource is addressed by its URL, so the query is part of the cache key (without the proof of a URL signature,
+{prefix}    -- which is for the AS: the resource is the same for every client)
+{prefix}    ngx.var.m4d_path = ngx.var.m4d_path..dynredir.suffix(dynredir.query(ngx.var.args{key_drop}))
 {prefix}  }}
 {prefix}  log_by_lua_block {{
 {prefix}    -- the CMCD information of the request goes to the reporter of the AS (reference point M3d), if M3d is configured

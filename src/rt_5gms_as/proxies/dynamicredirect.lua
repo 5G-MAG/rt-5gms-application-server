@@ -134,10 +134,27 @@ function dynamicredirect.split_location(location, base)
     return origin..dir, leaf..tail
 end
 
--- The query that a request to the endpoint of a dynamic redirect hands to the origin: the query of the target of the redirect, without what the
--- CMCD handler of the location removed
-function dynamicredirect.target_query(args)
-    local query = (args or ""):gsub("^&+", "")
+-- The query of a request to hand to the origin or to put into the cache key: the parameters of args other than those named in drop, without empty
+-- ones (what the CMCD handler of the location removed can leave a separator). The result has no question mark.
+function dynamicredirect.query(args, drop)
+    local kept = {}
+    for param in (args or ""):gmatch("[^&]+") do
+        local name = param:match("^([^=]*)")
+        local dropped = false
+        for _, d in ipairs(drop or {}) do
+            if name == d then
+                dropped = true
+            end
+        end
+        if not dropped then
+            kept[#kept + 1] = param
+        end
+    end
+    return table.concat(kept, "&")
+end
+
+-- The query as the suffix of a URL
+function dynamicredirect.suffix(query)
     if query == "" then
         return ""
     end
