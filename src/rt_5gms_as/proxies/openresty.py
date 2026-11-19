@@ -524,6 +524,9 @@ class OpenRestyPushIngestConfig(object):
         self.store_dir: str = store_dir
         self.protocol: str = protocol
         # DASH-IF Live Media Ingest, clause 7.1.1: the HTTP DELETE method belongs to interface 2 (the deprecated term identifier does not say which)
+        # implementation choice, text silent, see AS audit O-29 (no CR): TS 26.512 table 8.1-1 names no interface for the deprecated term identifier, and
+        # version 1.0 of the DASH-IF text defined both, so a source of either can use it: the AS accepts the DELETE of interface 2 and makes neither
+        # of the checks that belong to one interface only (415 of interface 2, 412 of interface 1) for it
         self.allow_delete: bool = protocol != INGEST_PUSH_INTERFACE_1
         # clause 5.3: 415 (table 6 of clause 7.1.2, interface 2) and 412 (the manifest of clause 6.2, interface 1) are answered for the interface
         # that defines what they check

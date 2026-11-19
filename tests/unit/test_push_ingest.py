@@ -126,6 +126,19 @@ class PushIngest(unittest.TestCase):
         self.assertEqual(self.push('a/seg.m4s', method='DELETE')[0], 400)
         self.assertEqual(self.distributed('a/seg.m4s')[0], 200)
 
+    def test_the_deprecated_term_identifier_serves_a_source_of_either_interface(self):
+        # implementation choice, text silent, see AS audit O-29: no interface is named for it, so the DELETE of interface 2 works and neither the 415 of
+        # interface 2 nor the 412 of interface 1 is answered
+        self.start(push_chc(DEPRECATED))
+        self.assertEqual(self.push('a/seg.cmfv', headers={'Content-Type': 'audio/mp4'})[0], 200)
+        mpd = (b'<MPD><Period><AdaptationSet>'
+               b'<SegmentTemplate initialization="$RepresentationID$/init.header" media="$RepresentationID$/seg-$Number$.cmfv"/>'
+               b'</AdaptationSet></Period></MPD>')
+        self.assertEqual(self.push('live.mpd', mpd)[0], 200)
+        self.assertEqual(self.push('v2/seg-1.cmfv')[0], 200)
+        self.assertEqual(self.push('a/seg.cmfv', method='DELETE')[0], 200)
+        self.assertEqual(self.distributed('a/seg.cmfv')[0], 404)
+
     def test_the_mime_type_follows_the_extension_of_table_6(self):
         self.start()
         for name, mime in (('a.mpd', 'application/dash+xml'), ('a.cmfv', 'video/mp4'), ('a.cmfa', 'audio/mp4'), ('a.cmft', 'application/mp4'),
