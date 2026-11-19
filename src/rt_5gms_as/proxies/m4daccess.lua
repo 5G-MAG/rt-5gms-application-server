@@ -194,7 +194,10 @@ function m4daccess.cors(aliases)
 end
 
 -- Clause 7.6.4.2: of the header fields of the origin response only those that describe the representation, the caching directives and
--- the connection are passed on; the other origin fields are not forwarded
+-- the connection are passed on; the other origin fields are not forwarded.
+-- Implementation choice, two texts conflict, see CR-038 and AS audit O-4: clause 7.6.4.2 says that no origin field is forwarded unless the flag
+-- originCacheHeaders is true, but that flag is in no data model or YAML of TS 26.510 (clause 8.8.3.1), so it cannot be set. The default stands, kept to what
+-- an HTTP response needs to be understood (the representation fields and the caching directives).
 local keep = {
     ["content-type"] = true, ["content-length"] = true, ["content-range"] = true, ["content-encoding"] = true,
     ["content-language"] = true, ["content-disposition"] = true, ["accept-ranges"] = true, ["transfer-encoding"] = true,
@@ -209,6 +212,26 @@ function m4daccess.filter_origin_headers()
         if not keep[lname] and lname:sub(1, 15) ~= "access-control-" then
             ngx.header[name] = nil
         end
+    end
+end
+
+-- Implementation choice, text silent how: a caching rule with statusCodeFilters applies to the origin status codes listed; "for the others the directives
+-- of the origin apply" (TS 26.512 V19.3.0 clause 7.6.4.2, TS 26.510 V19.2.0 table 8.8.3.1-1). nginx ignores or honours the cache fields of the origin for a
+-- whole location, not for some codes only, so the location ignores them (the rule must override them for the codes of the filter) and an answer with another
+-- code is not kept in the cache of the AS. What can be done for those answers is to hand the directives of the origin to the Media Player: this function
+-- puts back the Cache-Control and Expires fields that the location hid. See AS audit O-2 (no CR: behaviour of one implementation).
+-- codes: set of the origin status codes of the rule.
+function m4daccess.origin_directives(codes)
+    if codes[ngx.status] then
+        return
+    end
+    local cache_control = ngx.var.upstream_http_cache_control
+    if cache_control and cache_control ~= "" then
+        ngx.header["Cache-Control"] = cache_control
+    end
+    local expires = ngx.var.upstream_http_expires
+    if expires and expires ~= "" then
+        ngx.header["Expires"] = expires
     end
 end
 

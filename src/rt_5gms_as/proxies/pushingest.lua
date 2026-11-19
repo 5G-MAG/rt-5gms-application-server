@@ -331,7 +331,8 @@ local function handle_delete(cfg, segs, uri)
         end
     end
     if not deleted then
-        -- the text gives no status for an object that is not there: "in all other scenarios" it is 400
+        -- implementation choice, text silent, see AS audit O-25 (no CR; confirm with the DASH-IF Ingest task force): the text gives no status for an object
+        -- that is not there: "in all other scenarios" it is 400
         return reply(400)
     end
     return reply(200)
@@ -347,6 +348,8 @@ function pushingest.handle(cfg)
     end
     local rel = uri:sub(#prefix + 1)
     local segs, why = segments(rel)
+    -- implementation choice, text silent, see AS audit O-25: "incorrect path" (403, clause 5.3 point 5a, 7.1.2) is a path that leaves the ingest baseURL,
+    -- every other path that cannot be a file is 400 (point 5e); success of POST and PUT is 200 with an empty body (200 is what DELETE has in 7.1.1)
     if not segs then
         -- an object outside the allowed path, or a path that cannot be a file (clause 7.1.2, 5.3)
         return reply(why == "outside" and 403 or 400)

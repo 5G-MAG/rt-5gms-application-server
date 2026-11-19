@@ -39,6 +39,8 @@ http {{
   client_body_temp_path {client_body_tmp};
   proxy_temp_path {proxy_temp_path};
   {proxy_cache_path_directive}
+  # implementation choice, text silent, see CR-038 and AS audit O-3: TS 26.512 clause 7.6.4.2 sends the default caching directives to clause 8.8.3.1 of
+  # TS 26.510, which has none; they apply when no caching rule matches and the origin gives none
   proxy_cache_valid 200 1d;
   proxy_cache_valid any 1m;
 {status_maps}

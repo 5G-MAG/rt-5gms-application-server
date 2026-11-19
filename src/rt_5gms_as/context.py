@@ -264,6 +264,8 @@ class Context(object):
         '''
         if resource_id not in self.__provisioning_sessions:
             return False
+        # implementation choice, text silent, see AS audit O-8 (no CR): TS 26.512 clause 4.5.4.7 does not give the state of a created resource; it is active,
+        # so that a 5GMSd AF that never invokes the (de)activation finds its content served
         return self.__provisioning_sessions[resource_id].get('active', True)
 
     def setContentHostingConfigurationActive(self, resource_id: str, active: bool):

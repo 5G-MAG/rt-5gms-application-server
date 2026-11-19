@@ -139,6 +139,13 @@ class PushIngest(unittest.TestCase):
         self.assertEqual(self.push('a/seg.cmfv', method='DELETE')[0], 200)
         self.assertEqual(self.distributed('a/seg.cmfv')[0], 404)
 
+    def test_a_purge_does_not_delete_the_objects_that_were_pushed(self):
+        # implementation choice, text silent (4.5.4.9 invalidates cached resources, a pushed object is the store of the ingest), see AS audit O-32
+        self.start()
+        self.push('a/seg.cmfv', b'kept')
+        self.assertEqual(asyncio.run(OpenRestyWebProxy(self.proxy.context).purgeUsingRegex('c1', '.*')), 0)
+        self.assertEqual(self.distributed('a/seg.cmfv')[2], b'kept')
+
     def test_the_mime_type_follows_the_extension_of_table_6(self):
         self.start()
         for name, mime in (('a.mpd', 'application/dash+xml'), ('a.cmfv', 'video/mp4'), ('a.cmfa', 'audio/mp4'), ('a.cmft', 'application/mp4'),

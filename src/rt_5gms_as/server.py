@@ -261,6 +261,8 @@ class M3Server:
         self.__check_id(request, afResourceId)
         if not ctx.haveContentHostingConfiguration(afResourceId):
             self.__gone_or_missing(request, ctx.wasContentHostingConfigurationDestroyed(afResourceId), 'Content Hosting Configuration')
+        # implementation choice, two texts conflict, see CR-040 and AS audit O-7: table 9.4.2-1 calls the destruction of a configuration that another one
+        # refers to an error, clause 4.5.4.6 (the operation) lists none and gives no status for it; the clause of the operation wins, so it is destroyed
         ctx.appLog().info("Deleting content hosting configuration %s..."%(afResourceId))
         wp = ctx.webProxy()
         ctx.deleteContentHostingConfiguration(afResourceId)

@@ -278,6 +278,10 @@ class WebProxyInterface(object):
         The expression is a regular expression as of ECMA-262 (TS 26.512 V19.3.0 clause 4.5.4.9), which is searched for in the text and
         not anchored at its start, as the other patterns of the Content Hosting Configuration are. The text is the path of the request
         URL as the M4d client sent it (without the query). Returns the number of items purged.
+
+        Implementation choice, text silent, see AS audit O-32 (no CR): clause 4.5.4.9 invalidates cached transport resources; an object that was pushed
+        at M2d (clause 8.3) is the store of the ingest, not a cache entry, and is not deleted by a purge (it cannot be fetched again): only DELETE
+        (DASH-IF interface 2) and the destruction of the configuration remove it.
         '''
         self._context.appLog().debug('Purging entries for %s using regex %s...', provisioningSessionId, re)
         try:

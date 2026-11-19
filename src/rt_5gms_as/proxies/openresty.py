@@ -259,6 +259,8 @@ class OpenRestyLocationConfig(object):
             ret += f'{prefix}  set $downstream_base_query "{self.downstream_query}";\n{prefix}  set $downstream_query "";\n'
         for (regex, replace) in self.rewrite_rules:
             ret += f'{prefix}  rewrite "{regex}" "{replace}" break;\n'
+        # implementation choice, text silent, see AS audit O-1 (no CR): the whole query (the token and expiry of a URL signature too, clause 7.6.4.5) goes to
+        # the origin as the rest of the URL (clause 8.2); the signature parameters are left out of the cache key only (key_drop below)
         ret += f'{prefix}  proxy_cache_key "$m4d_key_prefix:u=$m4d_path";\n'
         if rule is None:
             # a cookie of the origin is not forwarded (clause 7.6.4.2) and does not keep the resource out of the cache
@@ -276,6 +278,10 @@ class OpenRestyLocationConfig(object):
         ret += f'''{prefix}  header_filter_by_lua_block {{
 {prefix}    m4daccess.filter_origin_headers()
 '''
+        if rule is not None and rule['statusCodes']:
+            # the origin directives for the other status codes (m4daccess.lua)
+            filter_codes = ','.join(f'[{int(c)}]=true' for c in rule['statusCodes'])
+            ret += f'{prefix}    m4daccess.origin_directives({{{filter_codes}}})\n'
         if self.caching_rules_signal_ttl(rule):
             codes = ','.join(f'[{int(c)}]=true' for c in rule['statusCodes']) if rule['statusCodes'] else ''
             ret += f'{prefix}    m4daccess.signal_ttl({int(rule["maxAge"])}, {{{codes}}}, "{self.__session_token}")\n'
@@ -872,6 +878,8 @@ class OpenRestyWebProxy(WebProxyInterface):
                     dsk = (dc.domain_name_alias, certificate_filename is not None)
                     if dsk not in server_configs:
                         server_configs[dsk] = OpenRestyServerConfig(self._context, {dc.domain_name_alias}, proxy_cache_path is not None, certificate_filename)
+                # implementation choice, text silent, see AS audit O-21 (no CR): only the path of the distribution baseURL is used; its scheme and port are
+                # not (the AS serves at its own ports, TS 26.512 clause 6.0.2.2 names the defaults), and a mismatch does not refuse the configuration
                 base_url = urlparse(str(dc.base_url))
                 m4d_path_prefix = base_url.path
                 if m4d_path_prefix[0] != '/':
@@ -884,6 +892,8 @@ class OpenRestyWebProxy(WebProxyInterface):
                     self._makeIngestDirectory(self._context.ingestDir(), worker, token, 'dist-' + encode_resource_id(dc.distribution_id))
                     # TS 26.510 table 8.8.3.1-1: for push-based ingest the rules compare the upload request path (as for the pull rules: the path
                     # after the baseURL of the endpoint) and the mapped path is the path of the distribution URL
+                    # implementation choice, text silent about the base of the comparison (8.2 says the remainder after the baseURL, 8.3 says nothing,
+                    # table 8.8.3.1-1 says the upload request path), see AS audit O-30 (no CR): the same base as for pull
                     rules_locn = OpenRestyLocationConfig(self._context, ingest.path_prefix, '', provisioning_session_id)
                     for rr in dc.path_rewrite_rules or []:
                         if not rules_locn.addRewriteRule(rr.request_path_pattern, rr.mapped_path):
