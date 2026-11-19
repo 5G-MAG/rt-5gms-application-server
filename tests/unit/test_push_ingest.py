@@ -177,6 +177,24 @@ class PushIngest(unittest.TestCase):
         self.assertEqual(self.distributed('a/')[0], 404)
         self.assertEqual(self.distributed('a')[0], 404)
 
+    def test_the_ingest_endpoint_may_share_the_host_name_of_the_distribution(self):
+        # annex B.2.1 uses two host names, the text does not forbid one
+        self.start(push_chc(base='http://%s/live1/' % M4D))
+        self.assertEqual(self.proxy.send('PUT', M4D, '/live1/a/seg.m4s', b'shared')[0], 200)
+        self.assertEqual(self.distributed('a/seg.m4s')[2], b'shared')
+        self.assertEqual(self.proxy.get(M4D, '/live1/a/seg.m4s')[0], 400)
+
+    def test_a_configuration_with_the_ingest_baseurl_of_another_is_not_realised(self):
+        # two endpoints cannot be at one URL (as two service locations cannot): the proxy refuses it, so the M3 operation is a 500 and the
+        # configuration is not kept
+        proxy = Proxy({'c1': push_chc()})
+        self.addCleanup(proxy.stop)
+        other = push_chc()
+        other['distributionConfigurations'][0]['baseURL'] = 'http://%s/m4d/ps2/' % M4D
+        proxy.context.addContentHostingConfiguration('c2', CHC.model_validate(other))
+        with self.assertRaises(RuntimeError):
+            asyncio.run(OpenRestyWebProxy(proxy.context).writeConfiguration())
+
     def test_a_deactivated_configuration_has_no_publishing_point(self):
         # clause 4.5.4.7: it is not served; the ingest baseURL is not available (DASH-IF clause 5.3, point 5a: 404)
         self.start()
