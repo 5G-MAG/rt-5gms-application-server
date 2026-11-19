@@ -286,7 +286,7 @@ class OpenRestyLocationConfig(object):
 {prefix}      uri = uri:sub({len(self.path_prefix)})
 {prefix}    end
 {prefix}    -- ngx.log(ngx.DEBUG,"rewrite_by_lua_block: uri = ", uri)
-{origin_prefix}{prefix}    ngx.var.downstream_prefix_url,ngx.ctx.uri = dynredir.mapUrl("{self.path_prefix}", ngx.var.downstream_prefix_url, uri){map_query}
+{origin_prefix}{prefix}    ngx.var.downstream_prefix_url,ngx.ctx.uri,ngx.ctx.redirected = dynredir.mapUrl("{self.path_prefix}", ngx.var.downstream_prefix_url, uri){map_query}
 {prefix}    ngx.req.set_uri(uri)
 {prefix}    ngx.var.downstream_prefix_url = ngx.var.downstream_prefix_url..dynredir.escape_path(ngx.ctx.uri:sub(2))
 {prefix}    -- ngx.log(ngx.DEBUG,"rewrite_by_lua_block: proxy=", ngx.var.downstream_prefix_url,", uri=",uri)
@@ -304,6 +304,10 @@ class OpenRestyLocationConfig(object):
 {prefix}    local args = ngx.var.args
 {prefix}    if args then
 {prefix}      ngx.var.args = ngx.re.gsub(args, "(^|&)CMCD=[^&]*", "", "jo")
+{prefix}    end
+{prefix}    -- clause 8.2: a request to the endpoint of a redirect of the origin goes to the target of the redirect, with its query
+{prefix}    if ngx.ctx.redirected then
+{prefix}      ngx.var.downstream_prefix_url = ngx.var.downstream_prefix_url..dynredir.target_query(ngx.var.args)
 {prefix}    end
 {prefix}  }}
 {prefix}  log_by_lua_block {{
@@ -444,9 +448,9 @@ class OpenRestyServerConfig(object):
         ret += f'''{prefix}  location @handle_redirect {{
 {prefix}    rewrite_by_lua_block {{
 {prefix}      -- ngx.log(ngx.DEBUG,"rewrite_by_lua_block(",ngx.var.upstream_http_location,",",ngx.var.location_prefix,",",ngx.var.upstream_status,")")
-{prefix}      local matches = ngx.re.match(ngx.var.upstream_http_location, "(.*/)([^/].*)", "o")
-{prefix}      ngx.ctx.origin_redir_prefix = matches[1]
-{prefix}      local redir_object = matches[2]
+{prefix}      -- the Location may be a relative reference: it is resolved against the URL that was requested from the origin
+{prefix}      local origin_redir_prefix, redir_object = dynredir.split_location(ngx.var.upstream_http_location, ngx.var.downstream_prefix_url)
+{prefix}      ngx.ctx.origin_redir_prefix = origin_redir_prefix
 {prefix}      -- ngx.log(ngx.DEBUG, "ngx.ctx.origin_redir_prefix = '",ngx.ctx.origin_redir_prefix,"', redir_object = '",redir_object,"'")
 {prefix}      ngx.ctx.m4_redir_prefix = dynredir.get(ngx.var.location_prefix, ngx.ctx.origin_redir_prefix)
 {prefix}      ngx.redirect(ngx.ctx.m4_redir_prefix..redir_object, ngx.var.upstream_status)

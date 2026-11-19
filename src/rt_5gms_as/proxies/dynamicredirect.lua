@@ -62,10 +62,10 @@ local function dynamicredirect_mapUrl(provisioning_session_prefix, default_proxy
         if k == full_path:sub(0,k:len()) then
             local v = redir_map:get(k)
             dynamicredirect.set(k,v) -- Renew expiry time
-            return v,full_path:sub(k:len())
+            return v,full_path:sub(k:len()),true
         end
     end
-    return default_proxy,url_path
+    return default_proxy,url_path,false
 end
 dynamicredirect.mapUrl = dynamicredirect_mapUrl
 
@@ -73,6 +73,75 @@ dynamicredirect.mapUrl = dynamicredirect_mapUrl
 -- "@" are percent-encoded). The path of the request is decoded by the proxy: a "?" or "#" in it would else end the path of the origin URL.
 function dynamicredirect.escape_path(path)
     return (path:gsub("[^A-Za-z0-9%-._~!$&'()*+,;=:@/]", function(c) return string.format("%%%02X", c:byte()) end))
+end
+
+-- RFC 3986 clause 5.2.4
+local function remove_dot_segments(path)
+    local out, trailing = {}, false
+    local pos = 2
+    while pos <= #path + 1 do
+        local stop = path:find("/", pos, true) or (#path + 1)
+        local segment = path:sub(pos, stop - 1)
+        trailing = false
+        if segment == ".." then
+            out[#out] = nil
+            trailing = true
+        elseif segment == "." then
+            trailing = true
+        else
+            out[#out + 1] = segment
+        end
+        pos = stop + 1
+    end
+    if trailing and #out > 0 then
+        out[#out + 1] = ""
+    end
+    return "/"..table.concat(out, "/")
+end
+
+-- The URL that a Location header field of the origin stands for (RFC 9110 clause 10.2.2: it may be a relative reference, resolved as of RFC 3986
+-- clause 5.2.2 against the URL of the request to the origin)
+function dynamicredirect.resolve(location, base)
+    if location:match("^[%a][%w+.-]*:") then
+        return location
+    end
+    local scheme, authority, path = base:match("^([%a][%w+.-]*)://([^/?#]*)([^?#]*)")
+    if location:sub(1, 2) == "//" then
+        return scheme..":"..location
+    end
+    local ref_path, tail = location:match("^([^?#]*)(.*)$")
+    if ref_path == "" then
+        -- (a reference without path keeps the path of the base)
+    elseif ref_path:sub(1, 1) == "/" then
+        path = remove_dot_segments(ref_path)
+    else
+        path = remove_dot_segments((path:match("^(.*/)") or "/")..ref_path)
+    end
+    return scheme.."://"..authority..path..tail
+end
+
+-- TS 26.512 V19.3.0 clause 8.2: the prefix of the target of a redirect of the origin that gets a dynamically generated M4d endpoint, and the rest of
+-- the target (the last path segment, its query and fragment) that follows the endpoint in the location given to the Media Player
+function dynamicredirect.split_location(location, base)
+    local origin, path, tail = dynamicredirect.resolve(location, base):match("^([%a][%w+.-]*://[^/?#]*)([^?#]*)(.*)$")
+    if path == "" then
+        path = "/"
+    end
+    local dir, leaf = path:match("^(.*/)([^/]+/?)$")
+    if not dir then
+        dir, leaf = path, ""
+    end
+    return origin..dir, leaf..tail
+end
+
+-- The query that a request to the endpoint of a dynamic redirect hands to the origin: the query of the target of the redirect, without what the
+-- CMCD handler of the location removed
+function dynamicredirect.target_query(args)
+    local query = (args or ""):gsub("^&+", "")
+    if query == "" then
+        return ""
+    end
+    return "?"..query
 end
 
 return dynamicredirect

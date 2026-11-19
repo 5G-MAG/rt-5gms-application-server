@@ -62,6 +62,49 @@ print(ngx.shared.dynredirmap:get(second))
 
 
 @unittest.skipIf(RESTY is None, 'the resty command of OpenResty is not available')
+class RedirectTarget(unittest.TestCase):
+    BASE = 'http://o.example:81/media/sub/a.m4s'
+
+    def split(self, location, base=BASE):
+        return run_lua('print(table.concat({d.split_location("%s", "%s")}, "|"))' % (location, base))[0].split('|')
+
+    def test_an_absolute_location_keeps_its_query_in_the_part_after_the_endpoint(self):
+        self.assertEqual(self.split('http://cdn.example/other/b.m4s?sig=abc'), ['http://cdn.example/other/', 'b.m4s?sig=abc'])
+        # a slash in the query does not end the prefix
+        self.assertEqual(self.split('http://cdn.example/x/y.m4s?sig=a/b'), ['http://cdn.example/x/', 'y.m4s?sig=a/b'])
+
+    def test_a_relative_location_is_resolved_against_the_url_requested_from_the_origin(self):
+        # RFC 9110 clause 10.2.2 and RFC 3986 clause 5.2.2
+        self.assertEqual(self.split('/other/b.m4s?x=1'), ['http://o.example:81/other/', 'b.m4s?x=1'])
+        self.assertEqual(self.split('c.m4s'), ['http://o.example:81/media/sub/', 'c.m4s'])
+        self.assertEqual(self.split('../c.m4s'), ['http://o.example:81/media/', 'c.m4s'])
+        self.assertEqual(self.split('./d/../c.m4s'), ['http://o.example:81/media/sub/', 'c.m4s'])
+        self.assertEqual(self.split('//cdn.example/z/w.m4s'), ['http://cdn.example/z/', 'w.m4s'])
+        self.assertEqual(self.split('?x=1'), ['http://o.example:81/media/sub/', 'a.m4s?x=1'])
+        # the query of the request URL is not part of the base
+        self.assertEqual(self.split('c.m4s', 'http://o.example/a/b.m4s?q=1'), ['http://o.example/a/', 'c.m4s'])
+
+    def test_the_target_may_be_a_directory_or_the_root(self):
+        self.assertEqual(self.split('http://h.example/other/dir/'), ['http://h.example/other/', 'dir/'])
+        self.assertEqual(self.split('http://h.example'), ['http://h.example/', ''])
+
+    def test_the_endpoint_hands_the_query_of_the_request_to_the_target(self):
+        self.assertEqual(run_lua('print(d.target_query("sig=abc"))'), ['?sig=abc'])
+        # what the CMCD handler removed can leave a separator at the start
+        self.assertEqual(run_lua('print(d.target_query("&b=2"))'), ['?b=2'])
+        self.assertEqual(run_lua('print("[" .. d.target_query("") .. "]")\nprint("[" .. d.target_query(nil) .. "]")'), ['[]', '[]'])
+
+    def test_the_map_tells_whether_the_location_is_an_endpoint_of_a_redirect(self):
+        out = run_lua('''
+d.set("/m4d/ps/redir-1/", "http://t.example/x/")
+local function show(a, b, c) print(a .. "|" .. b .. "|" .. tostring(c)) end
+show(d.mapUrl("/m4d/ps/", "http://o.example/", "/redir-1/b.m4s"))
+show(d.mapUrl("/m4d/ps/", "http://o.example/", "/a/b.m4s"))
+''')
+        self.assertEqual(out, ['http://t.example/x/|/b.m4s|true', 'http://o.example/|/a/b.m4s|false'])
+
+
+@unittest.skipIf(RESTY is None, 'the resty command of OpenResty is not available')
 class OriginPath(unittest.TestCase):
     def test_the_decoded_path_of_the_request_is_percent_encoded_for_the_origin(self):
         # a decoded "?" would else start the query, a "#" a fragment, and a space or a "%" would make the URL of the origin invalid
@@ -92,6 +135,29 @@ class WorkerSeed(unittest.TestCase):
             with open(os.path.join(d, 'nginx.conf')) as fh:
                 text = fh.read()
             self.assertIn('init_worker_by_lua_block {\n    dynredir.seed()\n', text)
+            run = subprocess.run([OPENRESTY, '-t', '-c', os.path.join(d, 'nginx.conf'), '-p', d + '/'], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+            self.assertEqual(run.returncode, 0, run.stdout)
+
+
+@unittest.skipUnless(HAVE_NGINX, 'no openresty binary')
+class RedirectConfiguration(unittest.TestCase):
+    def test_the_locations_use_the_resolution_and_the_query_of_the_target_and_nginx_accepts_them(self):
+        with tempfile.TemporaryDirectory() as d:
+            cfg = os.path.join(d, 'as.conf')
+            with open(cfg, 'w') as fh:
+                fh.write(CONFIG.format(d=d))
+            for sub in ('log', 'run', 'temp'):
+                os.makedirs(os.path.join(d, sub))
+            ctx = Context(cfg)
+            ctx.setAppLog(logging.getLogger('test'))
+            ctx.addContentHostingConfiguration('chc-1', CHC.model_validate(chc_dict('http://origin.example.com/media/')))
+            self.assertTrue(asyncio.run(OpenRestyWebProxy(ctx).writeConfiguration()))
+            with open(os.path.join(d, 'nginx.conf')) as fh:
+                text = fh.read()
+            self.assertIn('ngx.ctx.redirected = dynredir.mapUrl(', text)
+            self.assertIn('if ngx.ctx.redirected then\n', text)
+            self.assertIn('ngx.var.downstream_prefix_url = ngx.var.downstream_prefix_url..dynredir.target_query(ngx.var.args)', text)
+            self.assertIn('dynredir.split_location(ngx.var.upstream_http_location, ngx.var.downstream_prefix_url)', text)
             run = subprocess.run([OPENRESTY, '-t', '-c', os.path.join(d, 'nginx.conf'), '-p', d + '/'], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
             self.assertEqual(run.returncode, 0, run.stdout)
 
