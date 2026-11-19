@@ -642,7 +642,8 @@ class MetricsReporter(object):
             self.__later(now + RETRY_SECONDS, url, body, tries)
             return
         status = response.status_code
-        if status in (200, 202):
+        # 200 (clause 5.3.5.2), 202 (the AF takes the report later) and 204 (the response table of the OpenAPI definition for a processed report) acknowledge it
+        if 200 <= status < 300:
             return
         if status == 503:
             # the AF cannot take it now: stored and sent again later, as the Retry-After header field says if it does

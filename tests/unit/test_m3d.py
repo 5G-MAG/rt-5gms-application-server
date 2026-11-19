@@ -489,6 +489,23 @@ class Reporting(unittest.TestCase):
         run(reporter.flush())
         self.assertEqual(len(self.af.reports()), 2)
 
+    def test_a_report_that_the_af_acknowledges_is_not_a_refusal_whichever_success_code_it_uses(self):
+        # TS 26.510 clause 5.3.5.2 gives 200 (and 202), the response table of the OpenAPI definition 204 for a processed report
+        for status in (200, 202, 204):
+            with self.subTest(status=status):
+                reporter = self.reporter(config_entry('object'))
+                self.af.report_status = status
+                self.sample(reporter, sid='s-%d' % status)
+                self.clock.now += 61
+                with self.assertLogs('MetricsReporter', level='DEBUG') as logs:
+                    logging.getLogger('MetricsReporter').debug('start')
+                    run(reporter.flush())
+                self.assertEqual([r.getMessage() for r in logs.records if r.levelno >= logging.WARNING], [])
+                before = len(self.af.reports())
+                self.clock.now += 100
+                run(reporter.flush())
+                self.assertEqual(len(self.af.reports()), before)
+
     def test_a_refused_report_makes_the_service_access_information_be_got_again(self):
         # 403: the AF says that metrics reporting is not provisioned
         reporter = self.reporter(config_entry('object'))
