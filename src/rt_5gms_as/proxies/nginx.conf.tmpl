@@ -14,7 +14,7 @@
 # likely get replaced by the 5GMS application server.
 #
 
-worker_processes 5;
+{user_directive}worker_processes 5;
 error_log    {error_log_path};
 pid        {pid_path};
 worker_rlimit_nofile 8192;

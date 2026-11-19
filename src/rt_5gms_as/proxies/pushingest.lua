@@ -40,6 +40,89 @@ local content_types = {
 }
 pushingest.content_types = content_types
 
+-- The same table 6 as the permissible MIME types of each extension (lower case): "video/mp4 or application/mp4" for .mp4, "application/x-mpegURL
+-- or vnd.apple.mpegURL" for .m3u8 (the second one read as application/vnd.apple.mpegurl)
+local permitted_types = {
+    m3u8 = {["application/x-mpegurl"] = true, ["application/vnd.apple.mpegurl"] = true}, mpd = {["application/dash+xml"] = true},
+    cmfv = {["video/mp4"] = true}, cmfa = {["audio/mp4"] = true}, cmft = {["application/mp4"] = true}, cmfm = {["application/mp4"] = true},
+    mp4 = {["video/mp4"] = true, ["application/mp4"] = true}, m4v = {["video/mp4"] = true}, m4a = {["audio/mp4"] = true},
+    m4s = {["video/iso.segment"] = true}, init = {["video/mp4"] = true}, header = {["video/mp4"] = true}, key = {["application/octet-stream"] = true},
+}
+
+-- Interface 2, clause 7.1.2: the combination of the extension of the object and the MIME type of the request is one of table 6. An extension that
+-- the table does not list, or a request without a MIME type, is not judged here.
+function pushingest.media_type_permitted(path, content_type)
+    local ext = path:match("%.([^./]+)$")
+    if not ext or not content_type or not permitted_types[ext:lower()] then
+        return true
+    end
+    local media_type = content_type:match("^%s*([^;%s]+)")
+    return media_type ~= nil and permitted_types[ext:lower()][media_type:lower()] == true
+end
+
+-- Interface 1, clause 6.2 (items a to c of the list on the MPEG-DASH manifest): the SegmentTemplate of each AdaptationSet has the same initialization
+-- and media attributes, which contain $RepresentationID$. Returns them for a manifest that follows this, nil otherwise.
+local function attribute(tag, name)
+    return tag:match('%f[%w]' .. name .. '%s*=%s*"([^"]*)"') or tag:match("%f[%w]" .. name .. "%s*=%s*'([^']*)'")
+end
+
+function pushingest.templates(xml)
+    local init, media
+    for tag in xml:gmatch("<SegmentTemplate%s([^>]*)>") do
+        local i, m = attribute(tag, "initialization"), attribute(tag, "media")
+        if i and m then
+            if init ~= nil and (i ~= init or m ~= media) then
+                return nil
+            end
+            init, media = i, m
+        end
+    end
+    if init and media and init:find("$RepresentationID$", 1, true) and media:find("$RepresentationID$", 1, true) then
+        return init, media
+    end
+    return nil
+end
+
+local function escape(text)
+    return (text:gsub("[%^%$%.%[%]%(%)%*%+%?%{%}%|\\]", "\\%0"))
+end
+
+-- The regular expression that a SegmentTemplate matches (ISO/IEC 23009-1 identifiers between $ signs); $RepresentationID$ is the capture
+local function template_regex(template)
+    local out, pos = {}, 1
+    while pos <= #template do
+        local first, last = template:find("%$[^$]*%$", pos)
+        if not first then
+            out[#out + 1] = escape(template:sub(pos))
+            break
+        end
+        out[#out + 1] = escape(template:sub(pos, first - 1))
+        local id = template:sub(first + 1, last - 1)
+        if id == "" then
+            out[#out + 1] = "\\$"
+        elseif id == "RepresentationID" then
+            out[#out + 1] = "(.+?)"
+        elseif id:match("^Number") or id:match("^Time") or id:match("^Bandwidth") or id:match("^SubNumber") then
+            out[#out + 1] = "[0-9]+"
+        else
+            out[#out + 1] = ".*?"
+        end
+        pos = last + 1
+    end
+    return table.concat(out)
+end
+
+local function file_exists(path)
+    local fh = io.open(path, "rb")
+    if not fh then
+        return false
+    end
+    -- a directory opens, but cannot be read
+    local _, err = fh:read(0)
+    fh:close()
+    return err == nil
+end
+
 local function reply(status)
     if status == 200 then
         ngx.status = 200
@@ -133,13 +216,108 @@ local function failure(code)
     return 500
 end
 
+-- Interface 1: the templates of a manifest that was posted are kept, so that a segment of a track can be told from its initialization fragment
+local function templates_key(cfg)
+    return "pushtpl|" .. cfg.id
+end
+
+local function remember_manifest(cfg, segs, file, data)
+    local dict = ngx.shared.m4d_ingest
+    if not dict then return end
+    if file then
+        local fh = io.open(file, "rb")
+        data = fh and fh:read(1048576)
+        if fh then fh:close() end
+    end
+    local init, media = pushingest.templates(data or "")
+    if not init then return end
+    local dir = #segs > 1 and (table.concat(segs, "/", 1, #segs - 1) .. "/") or ""
+    local list = cjson.decode(dict:get(templates_key(cfg)) or "{}")
+    list[table.concat(segs, "/")] = {dir = dir, init = init, media = media}
+    dict:set(templates_key(cfg), cjson.encode(list))
+end
+
+-- Whether the object is a media segment of a track whose initialization fragment (the object that the manifest names for the Representation)
+-- is not in the store of the first distribution configuration that has one
+local function init_missing(cfg, rel)
+    local dict = ngx.shared.m4d_ingest
+    local json = dict and dict:get(templates_key(cfg))
+    if not json then return false end
+    local store
+    for _, d in ipairs(cfg.distributions) do
+        if d.dir then store = d break end
+    end
+    if not store then return false end
+    for _, e in pairs(cjson.decode(json)) do
+        local m = ngx.re.match(rel, "^" .. escape(e.dir) .. template_regex(e.media) .. "$", "jo")
+        if m and not ngx.re.find(rel, "^" .. escape(e.dir) .. template_regex(e.init) .. "$", "jo") then
+            local init = e.init:gsub("%$RepresentationID%$", (m[1]:gsub("%%", "%%%%")))
+            if init:find("$", 1, true) and init:gsub("%$%$", ""):find("$", 1, true) then
+                return false
+            end
+            init = e.dir .. init:gsub("%$%$", "$")
+            local mapped = pushingest.map_path(store.rules, cfg.prefix .. init, cfg.prefix)
+            local segs = mapped and segments(mapped)
+            return segs ~= nil and #segs > 0 and not file_exists(store.dir .. "/" .. table.concat(segs, "/"))
+        end
+    end
+    return false
+end
+
+-- Push distribution (TS 26.510 table 8.8.3.1-1, distribution mode PUSH; TS 26.512 clauses 4.10A and 8.3): this AS is the ingest source of the
+-- downstream AS. The object is sent with one HTTP POST to the distribution baseURL and the mapped path (DASH-IF clauses 5.1, 5.2 and 6.2: User-Agent,
+-- one object in each request, the MIME type of table 6). It is sent after the response to the source, from a copy (a hard link) of the body.
+local function push_downstream(premature, job)
+    if premature then return end
+    local fh = io.open(job.file, "rb")
+    if not fh then
+        ngx.log(ngx.ERR, "push distribution: ", job.file, " cannot be read")
+        return
+    end
+    local size = fh:seek("end")
+    fh:seek("set", 0)
+    local httpc = require("resty.http").new()
+    -- clause 5.3: a timeout in the order of a segment duration (1 to 6 seconds) for establishing the connection
+    httpc:set_timeouts(6000, 60000, 60000)
+    local res, err = httpc:request_uri(job.url, {
+        method = "POST",
+        body = function() return fh:read(65536) end,
+        headers = {["Content-Length"] = tostring(size), ["Content-Type"] = job.ctype, ["User-Agent"] = "rt-5gms-as", ["DASH-IF-Ingest"] = "1.1"},
+    })
+    fh:close()
+    os.remove(job.file)
+    if not res then
+        ngx.log(ngx.ERR, "push distribution: ", job.url, " not sent: ", err)
+    elseif res.status < 200 or res.status > 299 then
+        ngx.log(ngx.ERR, "push distribution: ", job.url, " answered ", res.status)
+    end
+end
+
+local function push_downstream_later(cfg, src, base, msegs)
+    local copy = cfg.tmp .. "/p" .. unique()
+    if C.link(src, copy) ~= 0 then
+        ngx.log(ngx.ERR, "push distribution: no copy of the object (errno ", ffi.errno(), ")")
+        return
+    end
+    local escaped = {}
+    for i, seg in ipairs(msegs) do escaped[i] = ngx.escape_uri(seg) end
+    local url = base .. table.concat(escaped, "/")
+    local ext = url:match("%.([^./?]+)$")
+    local ctype = (ext and content_types[ext:lower()]) or ngx.var.content_type or "application/octet-stream"
+    local ok, err = ngx.timer.at(0, push_downstream, {url = url, file = copy, ctype = ctype})
+    if not ok then
+        os.remove(copy)
+        ngx.log(ngx.ERR, "push distribution: cannot start the transfer: ", err)
+    end
+end
+
 local function handle_delete(cfg, segs, uri)
     if #segs == 0 or uri:sub(-1) == "/" then
         return reply(400)
     end
     local deleted = false
     for _, d in ipairs(cfg.distributions) do
-        local mapped = pushingest.map_path(d.rules, uri, cfg.prefix)
+        local mapped = d.dir and pushingest.map_path(d.rules, uri, cfg.prefix)
         local msegs = mapped and segments(mapped)
         if msegs and #msegs > 0 then
             local path = d.dir .. "/" .. table.concat(msegs, "/")
@@ -203,21 +381,38 @@ function pushingest.handle(cfg)
         fh:write(data)
         fh:close()
     end
+    if cfg.check_types and not pushingest.media_type_permitted(rel, ngx.var.content_type) then
+        -- clause 5.3, point 5b (a "may"): the MIME type is not one that table 6 permits for the extension
+        if not file then C.unlink(src) end
+        return reply(415)
+    end
+    if cfg.check_init and init_missing(cfg, rel) then
+        -- clause 5.3, point 5c (a "may"): the object is a segment of a track whose initialization fragment has not been received
+        if not file then C.unlink(src) end
+        return reply(412)
+    end
     local status = 200
     for _, d in ipairs(cfg.distributions) do
         local mapped = pushingest.map_path(d.rules, uri, prefix)
         local msegs = mapped and segments(mapped)
         if not msegs or #msegs == 0 then
-            ngx.log(ngx.ERR, "push ingest: the path rewrite rules of the distribution ", d.dir, " do not map ", uri, " to a path")
+            ngx.log(ngx.ERR, "push ingest: the path rewrite rules of the distribution ", d.dir or d.url, " do not map ", uri, " to a path")
             status = 500
             break
         end
-        local ok, code = publish(cfg, src, d.dir, msegs)
-        if not ok then
-            ngx.log(ngx.ERR, "push ingest: cannot store ", uri, " (errno ", tostring(code), ")")
-            status = failure(code)
-            break
+        if d.dir then
+            local ok, code = publish(cfg, src, d.dir, msegs)
+            if not ok then
+                ngx.log(ngx.ERR, "push ingest: cannot store ", uri, " (errno ", tostring(code), ")")
+                status = failure(code)
+                break
+            end
+        else
+            push_downstream_later(cfg, src, d.url, msegs)
         end
+    end
+    if status == 200 and rel:match("%.mpd$") and #segs >= 1 and cfg.check_init then
+        remember_manifest(cfg, segs, file, data)
     end
     if not file then
         C.unlink(src)

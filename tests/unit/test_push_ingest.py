@@ -5,9 +5,13 @@
 import asyncio
 import logging
 import os
+import pwd
 import tempfile
+import socket
 import time
 import unittest
+import http.client
+from unittest import mock
 
 from rt_5gms_as.context import Context
 from rt_5gms_as.openapi_5g.models.application_server_content_hosting_configuration import ApplicationServerContentHostingConfiguration as CHC
@@ -195,6 +199,104 @@ class PushIngest(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             asyncio.run(OpenRestyWebProxy(proxy.context).writeConfiguration())
 
+    def test_interface_2_answers_415_for_a_mime_type_that_table_6_does_not_permit_for_the_extension(self):
+        # clause 5.3, point 5b, and table 6 of clause 7.1.2
+        self.start(push_chc(IF2))
+        self.assertEqual(self.push('a/seg.cmfv', headers={'Content-Type': 'audio/mp4'})[0], 415)
+        self.assertEqual(self.push('a/seg.m4s', headers={'Content-Type': 'video/mp4'})[0], 415)
+        self.assertEqual(self.distributed('a/seg.cmfv')[0], 404)
+        self.assertEqual(self.push('a/seg.cmfv', headers={'Content-Type': 'video/mp4'})[0], 200)
+        self.assertEqual(self.push('a/x.mp4', headers={'Content-Type': 'application/mp4'})[0], 200)
+        self.assertEqual(self.push('a/x.mpd', headers={'Content-Type': 'Application/DASH+XML; charset=utf-8'})[0], 200)
+        # an extension that the table does not list, and a request without a MIME type, are not judged
+        self.assertEqual(self.push('a/x.ts', headers={'Content-Type': 'video/mp2t'})[0], 200)
+        self.assertEqual(self.push('a/y.cmfv')[0], 200)
+
+    def test_interface_1_has_no_table_of_mime_types(self):
+        self.start(push_chc(IF1))
+        self.assertEqual(self.push('a/seg.cmfv', headers={'Content-Type': 'audio/mp4'})[0], 200)
+
+    def test_interface_1_answers_412_for_a_segment_whose_initialization_fragment_is_missing(self):
+        # clause 5.3, point 5c, and clause 6.2: the manifest (SegmentTemplate with $RepresentationID$) names the initialization fragment of a track
+        self.start(push_chc(IF1))
+        mpd = (b'<MPD><Period><AdaptationSet>'
+               b'<SegmentTemplate initialization="$RepresentationID$/init.header" media="$RepresentationID$/seg-$Number$.cmfv"/>'
+               b'</AdaptationSet></Period></MPD>')
+        # no manifest yet: nothing says which fragment is the initialization one
+        self.assertEqual(self.push('v1/seg-1.cmfv')[0], 200)
+        self.assertEqual(self.push('live.mpd', mpd)[0], 200)
+        self.assertEqual(self.push('v2/seg-1.cmfv')[0], 412)
+        self.assertEqual(self.distributed('v2/seg-1.cmfv')[0], 404)
+        self.assertEqual(self.push('v2/init.header', b'header')[0], 200)
+        self.assertEqual(self.push('v2/seg-1.cmfv')[0], 200)
+        self.assertEqual(self.push('v2/seg-2.cmfv')[0], 200)
+        # another track has its own initialization fragment
+        self.assertEqual(self.push('v3/seg-7.cmfv')[0], 412)
+        # a manifest whose templates are not the same in each AdaptationSet does not follow clause 6.2 and says nothing
+        self.assertEqual(self.push('other.mpd', mpd.replace(b'</AdaptationSet>', b'</AdaptationSet><AdaptationSet><SegmentTemplate initialization="x/$RepresentationID$/i" media="x/$RepresentationID$/s-$Number$"/></AdaptationSet>'))[0], 200)
+
+    def test_the_initialization_fragment_is_looked_for_where_the_distribution_has_it(self):
+        chc = push_chc(IF1, dist={'pathRewriteRules': [{'requestPathPattern': '^/v1/', 'mappedPath': '/video/'}]})
+        self.start(chc)
+        mpd = b'<MPD><SegmentTemplate initialization="$RepresentationID$/init.header" media="$RepresentationID$/seg-$Number$.cmfv"/></MPD>'
+        self.push('live.mpd', mpd)
+        self.assertEqual(self.push('v1/seg-1.cmfv')[0], 412)
+        self.assertEqual(self.push('v1/init.header')[0], 200)
+        self.assertEqual(self.distributed('video/init.header')[0], 200)
+        self.assertEqual(self.push('v1/seg-1.cmfv')[0], 200)
+
+    def test_the_ingest_endpoint_answers_on_ipv6_and_keeps_the_connection(self):
+        # DASH-IF clause 5.2: IPv4 and IPv6 transport, persistent connections
+        self.start()
+        conn = http.client.HTTPConnection('::1', self.proxy.port, timeout=10)
+        for n in range(3):
+            conn.request('PUT', '/live1/a/%d.m4s' % n, body=b'six', headers={'Host': INGEST})
+            response = conn.getresponse()
+            response.read()
+            self.assertEqual(response.status, 200)
+        local = conn.sock.getsockname()
+        conn.close()
+        self.assertEqual(self.distributed('a/2.m4s')[2], b'six')
+        self.assertIn(':', local[0])
+
+    def test_the_cors_headers_of_the_domain_name_alias_are_set_for_pushed_objects(self):
+        self.start(push_chc(dist={'domainNameAlias': 'alias.example.net'}))
+        self.push('a/seg.m4s')
+        status, headers, _ = self.proxy.get('alias.example.net', '/m4d/ps1/a/seg.m4s', headers={'Origin': 'http://alias.example.net'})
+        self.assertEqual(status, 200)
+        self.assertEqual(headers['access-control-allow-origin'], 'http://alias.example.net')
+
+    def test_a_distribution_of_mode_push_sends_every_object_to_the_downstream_as(self):
+        # TS 26.510 clause 5.2.8.2 and table 8.8.3.1-1, TS 26.512 clauses 4.10A and 8.3: the downstream AS is provisioned first, its ingest baseURL is
+        # the baseURL of the distribution of the upstream one
+        down = Proxy({'d1': push_chc(IF1, base='http://127.0.0.1/down/')})
+        self.addCleanup(down.stop)
+        up_chc = push_chc(IF1, dist={'pathRewriteRules': [{'requestPathPattern': '^/asset1/', 'mappedPath': '/mapped/'}]})
+        up_chc['distributionConfigurations'] = [
+            {'distributionId': 'to-down', 'mode': 'PUSH', 'baseURL': 'http://127.0.0.1:%d/down/' % down.port,
+             'pathRewriteRules': [{'requestPathPattern': '^/asset1/', 'mappedPath': '/mapped/'}]},
+            up_chc['distributionConfigurations'][0]]
+        self.start(up_chc)
+        self.assertEqual(self.push('asset1/seg1.cmfv', b'upstream-object')[0], 200)
+        self.assertEqual(self.push('asset2/seg2.cmfv', b'second', 'POST', chunks=[b'sec', b'ond'])[0], 200)
+        deadline = time.time() + 10
+        got = []
+        while time.time() < deadline and len(got) < 2:
+            got = [down.get(M4D, '/m4d/ps1/' + path) for path in ('mapped/seg1.cmfv', 'asset2/seg2.cmfv')]
+            got = [g for g in got if g[0] == 200]
+            time.sleep(0.1)
+        self.assertEqual([g[2] for g in got], [b'upstream-object', b'second'])
+        # the upstream AS keeps serving its own distribution
+        self.assertEqual(self.distributed('mapped/seg1.cmfv')[2], b'upstream-object')
+
+    def test_a_downstream_as_that_is_not_there_does_not_stop_the_ingest(self):
+        from tests.unit.nginx_rig import free_port
+        chc = push_chc(IF1)
+        chc['distributionConfigurations'].append({'distributionId': 'to-down', 'mode': 'PUSH', 'baseURL': 'http://127.0.0.1:%d/down/' % free_port()})
+        self.start(chc)
+        self.assertEqual(self.push('a/seg.cmfv', b'x')[0], 200)
+        self.assertEqual(self.distributed('a/seg.cmfv')[2], b'x')
+
     def test_a_deactivated_configuration_has_no_publishing_point(self):
         # clause 4.5.4.7: it is not served; the ingest baseURL is not available (DASH-IF clause 5.3, point 5a: 404)
         self.start()
@@ -249,6 +351,51 @@ class PushIngestConfiguration(unittest.TestCase):
         for path in ('/a//b/', '/a%3Bb/', '/a%22b/'):
             with self.subTest(path=path), self.assertRaises(Context.ValueError):
                 self.add(baseURL='http://ingest.example.net' + path)
+
+    def test_a_distribution_of_mode_push_goes_with_a_push_ingest_and_names_the_downstream_ingest_baseurl(self):
+        def add(ingest=None, **dist):
+            chc = chc_dict(1, ingest=ingest)
+            chc['distributionConfigurations'] = [dict({'distributionId': 'p', 'mode': 'PUSH', 'baseURL': 'http://down.example.net/in/'}, **dist)]
+            return self.ctx.addContentHostingConfiguration('c1', CHC.model_validate(chc))
+        push = {'mode': 'PUSH', 'protocol': IF1, 'baseURL': 'http://ingest.example.net/live1/'}
+        add(push)
+        self.ctx.deleteContentHostingConfiguration('c1')
+        with self.assertRaises(Context.ValueError):
+            add()
+        with self.assertRaises(Context.ValueError):
+            add(push, canonicalDomainName='as.example.net')
+        with self.assertRaises(Context.ValueError):
+            add(push, domainNameAlias='alias.example.net')
+        with self.assertRaises(Context.ValueError):
+            add(push, baseURL='http://down.example.net/in/?a=b')
+        with self.assertRaises(Context.ConfigError):
+            add(push, baseURL='https://down.example.net/in/')
+
+    @unittest.skipUnless(HAVE_NGINX, 'no openresty binary')
+    def test_an_as_that_runs_as_root_gives_the_ingest_directories_to_the_user_of_the_nginx_workers(self):
+        # the workers create the directories of the objects below them: whatever user the AS runs as, they have to be able to
+        try:
+            nobody = pwd.getpwnam('nobody')
+        except KeyError:
+            self.skipTest('no user nobody')
+        self.add()
+        proxy = OpenRestyWebProxy(self.ctx)
+        with mock.patch('os.geteuid', return_value=0), mock.patch('os.chown') as chown:
+            asyncio.run(proxy.writeConfiguration())
+        owned = {call.args[0] for call in chown.call_args_list if call.args[1] == nobody.pw_uid}
+        ingest = self.ctx.ingestDir()
+        self.assertTrue({ingest, os.path.join(ingest, 'c1'), os.path.join(ingest, 'c1', 'dist-d1')} <= owned, owned)
+        with open(os.path.join(self.dir.name, 'nginx.conf')) as fh:
+            self.assertRegex(fh.read(), r'(?m)^user nobody \S+;$')
+
+    @unittest.skipUnless(HAVE_NGINX, 'no openresty binary')
+    def test_an_as_that_does_not_run_as_root_leaves_the_user_of_the_workers_alone(self):
+        self.add()
+        with mock.patch('os.chown') as chown:
+            asyncio.run(OpenRestyWebProxy(self.ctx).writeConfiguration())
+        chown.assert_not_called()
+        with open(os.path.join(self.dir.name, 'nginx.conf')) as fh:
+            self.assertNotRegex(fh.read(), r'(?m)^user ')
 
     def test_the_objects_are_removed_with_the_configuration(self):
         directory = os.path.join(self.ctx.ingestDir(), 'c1')

@@ -31,7 +31,9 @@ import hashlib
 import importlib.resources
 import logging
 import os
+import grp
 import os.path
+import pwd
 import regex
 import shutil
 import signal
@@ -43,7 +45,7 @@ from urllib.parse import urlparse, unquote
 
 from ..proxy_factory import WebProxyInterface, add_web_proxy
 from ..utils import find_executable_on_path, traverse_directory_tree, encode_resource_id, decode_resource_id
-from ..context import Context, INGEST_PULL_PROTOCOLS, INGEST_LOW_LATENCY_PULL_PROTOCOL, INGEST_PUSH_INTERFACE_1
+from ..context import Context, INGEST_PULL_PROTOCOLS, INGEST_LOW_LATENCY_PULL_PROTOCOL, INGEST_PUSH_INTERFACE_1, INGEST_PUSH_INTERFACE_2
 from .. import m3d
 
 class OpenRestyLocationConfig(object):
@@ -513,27 +515,36 @@ class OpenRestyPushIngestConfig(object):
     The location is the ingest baseURL that the 5GMSd AF set; it receives the HTTP POST and PUT requests (and DELETE for interface 2) of the
     DASH-IF Live Media Ingest specification and stores the objects for each distribution configuration (see pushingest.lua).
     '''
-    def __init__(self, context: Context, path_prefix: str, provisioning_session: str, store_dir: str, allow_delete: bool):
+    def __init__(self, context: Context, path_prefix: str, provisioning_session: str, store_dir: str, protocol: str):
         self.__context: Context = context
         self.path_prefix: str = path_prefix if path_prefix.startswith('/') else '/' + path_prefix
         if not self.path_prefix.endswith('/'):
             self.path_prefix += '/'
         self.provisioning_session: str = provisioning_session
         self.store_dir: str = store_dir
-        # DASH-IF Live Media Ingest, clause 7.1.1: the HTTP DELETE method belongs to interface 2
-        self.allow_delete: bool = allow_delete
+        self.protocol: str = protocol
+        # DASH-IF Live Media Ingest, clause 7.1.1: the HTTP DELETE method belongs to interface 2 (the deprecated term identifier does not say which)
+        self.allow_delete: bool = protocol != INGEST_PUSH_INTERFACE_1
+        # clause 5.3: 415 (table 6 of clause 7.1.2, interface 2) and 412 (the manifest of clause 6.2, interface 1) are answered for the interface
+        # that defines what they check
+        self.check_types: bool = protocol == INGEST_PUSH_INTERFACE_2
+        self.check_init: bool = protocol == INGEST_PUSH_INTERFACE_1
         # the directory of the objects of each distribution configuration with its path rewrite rules (in the form for the whole request path)
         self.distributions: List[Dict[str, Any]] = []
 
     def addDistribution(self, directory: str, rules: List[Tuple[str, str]]) -> None:
         self.distributions.append({'dir': directory, 'rules': [[a, b] for (a, b) in rules]})
 
+    def addPushDistribution(self, url: str, rules: List[Tuple[str, str]]) -> None:
+        '''A distribution configuration of mode PUSH: every object is sent on to the downstream AS at this baseURL (TS 26.510 table 8.8.3.1-1)'''
+        self.distributions.append({'url': url if url.endswith('/') else url + '/', 'rules': [[a, b] for (a, b) in rules]})
+
     def status_maps(self) -> Dict[str, str]:
         return {}
 
     def __eq__(self, other: Any) -> bool:
         return type(other) is type(self) and self.path_prefix == other.path_prefix and self.provisioning_session == other.provisioning_session \
-            and self.store_dir == other.store_dir and self.allow_delete == other.allow_delete and self.distributions == other.distributions
+            and self.store_dir == other.store_dir and self.protocol == other.protocol and self.distributions == other.distributions
 
     def __ne__(self, other: Any) -> bool:
         return not self == other
@@ -541,7 +552,8 @@ class OpenRestyPushIngestConfig(object):
     async def config(self, indent: int = 0) -> str:
         prefix = ' ' * indent
         tmp = os.path.join(self.store_dir, '.tmp')
-        text = json.dumps({'prefix': self.path_prefix, 'tmp': tmp, 'delete': self.allow_delete, 'distributions': self.distributions})
+        text = json.dumps({'id': self.provisioning_session + ':' + self.path_prefix, 'prefix': self.path_prefix, 'tmp': tmp, 'delete': self.allow_delete,
+                           'check_types': self.check_types, 'check_init': self.check_init, 'distributions': self.distributions})
         assert ']==]' not in text
         token = encode_resource_id(self.provisioning_session)
         body = f'''{prefix}  client_max_body_size 0;
@@ -783,6 +795,11 @@ class OpenRestyWebProxy(WebProxyInterface):
             cache_inactive = self._context.getConfigVar('5gms_as', 'cache_inactive', '30d')
             proxy_cache_path_directive = 'proxy_cache_path %s levels=1:2 use_temp_path=on keys_zone=cacheone:10m inactive=%s;'%(proxy_cache_path, cache_inactive)
 
+        # The nginx worker processes write the objects of the push ingest. When the AS runs as root they run as the user that the nginx build names
+        # (nobody by default), so the directories that the AS creates are given to that user and the configuration names it
+        worker = self._workerIdentity()
+        user_directive = 'user %s %s;\n' % (worker[0], worker[1]) if worker is not None else ''
+
         # DASH-IF Live Media Ingest clause 5.3, point 5a: a publishing point that is not available (a host name that has none, or a deactivated
         # Content Hosting Configuration) gets 404 for the methods of the protocol that the static default server would refuse with 405
         default_server_extra = ''
@@ -820,11 +837,19 @@ class OpenRestyWebProxy(WebProxyInterface):
                 if ingest_key not in server_configs:
                     server_configs[ingest_key] = OpenRestyServerConfig(self._context, {ingest_url.hostname}, proxy_cache_path is not None, None)
                 ingest = OpenRestyPushIngestConfig(self._context, unquote(ingest_url.path or '/'), provisioning_session_id, chc_dir,
-                                                   i.ingest_configuration.protocol != INGEST_PUSH_INTERFACE_1)
-                os.makedirs(chc_dir, mode=0o755, exist_ok=True)
+                                                   i.ingest_configuration.protocol)
+                self._makeIngestDirectory(self._context.ingestDir(), worker, token)
             for dc in i.distribution_configurations:
                 # TS 26.510 V19.2.0 table 8.8.3.3-1: content distributed exclusively via a supplementary network is not available at M4
                 if any(n.distribution_mode == 'MODE_EXCLUSIVE' for n in dc.supplementary_distribution_networks or []):
+                    continue
+                if dc.mode == 'PUSH':
+                    # TS 26.510 table 8.8.3.1-1: no service location; this AS pushes every object to the downstream AS at the baseURL, by the mapped path
+                    push_rules = OpenRestyLocationConfig(self._context, ingest.path_prefix, '', provisioning_session_id)
+                    for rr in dc.path_rewrite_rules or []:
+                        if not push_rules.addRewriteRule(rr.request_path_pattern, rr.mapped_path):
+                            return False
+                    ingest.addPushDistribution(str(dc.base_url), push_rules.rewrite_rules)
                     continue
                 certificate_filename = None
                 if dc.certificate_id is not None:
@@ -845,7 +870,7 @@ class OpenRestyWebProxy(WebProxyInterface):
                 if push:
                     # the objects of this distribution configuration are the files below its directory, put there by the ingest endpoint
                     dist_dir = os.path.join(chc_dir, 'dist-' + encode_resource_id(dc.distribution_id))
-                    os.makedirs(dist_dir, mode=0o755, exist_ok=True)
+                    self._makeIngestDirectory(self._context.ingestDir(), worker, token, 'dist-' + encode_resource_id(dc.distribution_id))
                     # TS 26.510 table 8.8.3.1-1: for push-based ingest the rules compare the upload request path (as for the pull rules: the path
                     # after the baseURL of the endpoint) and the mapped path is the path of the distribution URL
                     rules_locn = OpenRestyLocationConfig(self._context, ingest.path_prefix, '', provisioning_session_id)
@@ -906,6 +931,42 @@ class OpenRestyWebProxy(WebProxyInterface):
         except:
             raise
         return True
+
+    @classmethod
+    def _workerIdentity(cls) -> Optional[Tuple[str, str, int, int]]:
+        '''The user and group (names and identifiers) of the nginx worker processes if the AS runs as root, else None
+
+        Only a master process that runs as root changes the user of its workers: the one of the --user and --group of the nginx build, nobody and its
+        primary group if the build names none.
+        '''
+        if os.geteuid() != 0:
+            return None
+        user, group = 'nobody', None
+        if cls.__nginx is not None:
+            built = subprocess.run([cls.__nginx, '-V'], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, shell=False).stdout.decode('utf-8', 'replace')
+            for option in built.split():
+                if option.startswith('--user='):
+                    user = option[len('--user='):]
+                elif option.startswith('--group='):
+                    group = option[len('--group='):]
+        account = pwd.getpwnam(user)
+        group_entry = grp.getgrnam(group) if group else grp.getgrgid(account.pw_gid)
+        return (account.pw_name, group_entry.gr_name, account.pw_uid, group_entry.gr_gid)
+
+    @staticmethod
+    def _makeIngestDirectory(root: str, worker: Optional[Tuple[str, str, int, int]], *parts: str) -> str:
+        '''Create the directory root/parts... (mode 755) and, for an AS that runs as root, give the directories to the user of the nginx workers
+
+        The workers create the directories of the objects below them (pushingest.lua), whatever user the AS runs as.
+        '''
+        path = root
+        for part in (None,) + parts:
+            if part is not None:
+                path = os.path.join(path, part)
+            os.makedirs(path, mode=0o755, exist_ok=True)
+            if worker is not None:
+                os.chown(path, worker[2], worker[3])
+        return path
 
     async def tidyConfiguration(self):
         '''

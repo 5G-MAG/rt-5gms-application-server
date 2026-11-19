@@ -494,6 +494,10 @@ class Context(object):
             raise Context.ValueError('The mode of an ingest by %s has to be %s' % (chc.ingest_configuration.protocol, 'PUSH' if push else 'PULL'), 'ingestConfiguration.mode')
         if push:
             self.__checkPushIngest(chc)
+        # TS 26.510 V19.2.0 clause 5.2.8.2 (service chaining by push): a distribution that pushes to a downstream AS (mode PUSH) goes with a push ingest
+        for distrib in chc.distribution_configurations:
+            if distrib.mode == 'PUSH':
+                self.__checkPushDistribution(chc, distrib)
         # The values below end up in the web proxy configuration: only what cannot change its structure is accepted
         self.__checkProxySafeValues(chc)
         # TS 26.512 clause 4.5.4.3: an invalid reference to another resource fails the operation with 400
@@ -560,6 +564,26 @@ class Context(object):
         if self.__PUSH_PATH.match(path) is None or not path.startswith('/') or any(seg in ('.', '..') for seg in path.split('/')) or '//' in path:
             raise Context.ValueError('The path of a push ingest baseURL has to be made of plain segments (no empty, dot or dot-dot segment)', 'ingestConfiguration.baseURL')
 
+    def __checkPushDistribution(self, chc, distrib):
+        '''Check a distribution configuration of mode PUSH: this AS pushes the content to the downstream AS whose ingest baseURL is its baseURL
+
+        TS 26.510 V19.2.0 table 8.8.3.1-1 and clause 5.2.8.2: the upstream configuration ingests by push, and a distribution that pushes has no
+        canonicalDomainName, domainNameAlias or entryPoint. Raises Context.ValueError (400) or Context.ConfigError (500).
+        '''
+        if not self.isPushIngest(chc):
+            raise Context.ValueError('A distribution of mode PUSH needs an ingest configuration of mode PUSH', 'distributionConfigurations.mode')
+        for name, value in (('canonicalDomainName', distrib.canonical_domain_name), ('domainNameAlias', distrib.domain_name_alias), ('entryPoint', distrib.entry_point)):
+            if value is not None:
+                raise Context.ValueError('A distribution of mode PUSH has no %s' % name, 'distributionConfigurations.' + name)
+        base = urlparse(str(distrib.base_url))
+        path = unquote(base.path or '/')
+        if base.query or base.fragment or not base.hostname or self.__HOSTNAME.match(base.hostname) is None or self.__PUSH_PATH.match(path) is None \
+                or any(seg in ('.', '..') for seg in path.split('/')):
+            raise Context.ValueError('The baseURL of a distribution of mode PUSH has to be the ingest baseURL of the downstream AS: an http or https URL with a plain host name and path and no query', 'distributionConfigurations.baseURL')
+        if base.scheme != 'http':
+            # the client certificate of certificateId and the validation of the downstream AS are not defined for https
+            raise Context.ConfigError('This 5GMS AS can only push to a downstream AS by http')
+
     @classmethod
     def isPushIngest(cls, chc) -> bool:
         '''Whether the Content Hosting Configuration ingests by the DASH-IF push protocol (clause 8.3)'''
@@ -579,6 +603,9 @@ class Context(object):
             # TS 26.510 V19.2.0 clause 8.8.3.1: an AbsoluteUrl (RFC 3986 clause 4.3 absolute-URI) has an optional query and no fragment
             raise Context.ValueError('The ingest baseURL has to be an http or https URL with a plain host name and path and a query of unreserved, percent-encoded or sub-delimiter characters (no $ or ;)', 'ingestConfiguration.baseURL')
         for distrib in chc.distribution_configurations:
+            if distrib.mode == 'PUSH':
+                # no service location: checked by __checkPushDistribution
+                continue
             if distrib.canonical_domain_name is None or self.__HOSTNAME.match(distrib.canonical_domain_name) is None:
                 raise Context.ValueError('The canonicalDomainName has to be a host name', 'distributionConfigurations.canonicalDomainName')
             if distrib.domain_name_alias is not None and self.__HOSTNAME.match(distrib.domain_name_alias) is None:
