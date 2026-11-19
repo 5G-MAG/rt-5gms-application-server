@@ -249,11 +249,15 @@ class PushIngest(unittest.TestCase):
         # DASH-IF clause 5.2: IPv4 and IPv6 transport, persistent connections
         self.start()
         conn = http.client.HTTPConnection('::1', self.proxy.port, timeout=10)
+        sock = None
         for n in range(3):
             conn.request('PUT', '/live1/a/%d.m4s' % n, body=b'six', headers={'Host': INGEST})
+            sock = sock or conn.sock
             response = conn.getresponse()
             response.read()
             self.assertEqual(response.status, 200)
+            # the client reconnects by itself if the server closed the connection: the same socket proves that it did not
+            self.assertIs(conn.sock, sock)
         local = conn.sock.getsockname()
         conn.close()
         self.assertEqual(self.distributed('a/2.m4s')[2], b'six')
