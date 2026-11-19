@@ -632,6 +632,9 @@ class Context(object):
                         raise Context.ValueError('A parameter name has only unreserved URL characters', 'distributionConfigurations.urlSignature')
             if distrib.geo_fencing is not None:
                 # TS 26.512 V19.3.0 clause 7.6.4.6: the zone of a UE is known to the AS only through the operator's address ranges
+                # implementation choice, text silent about a locator type that the AS cannot evaluate, see AS audit O-16 (no CR): the tracking area code
+                # (TS 26.510 table B.1-1) needs the tracking area of the UE, which only the core knows; the configuration is refused at M3 (400) and not
+                # kept to be ignored, which would open the content to every UE
                 if distrib.geo_fencing.locator_type != 'urn:3gpp:media-delivery:locator-type:iso3166':
                     raise Context.ValueError('Only the locator type urn:3gpp:media-delivery:locator-type:iso3166 is supported', 'distributionConfigurations.geoFencing.locatorType')
                 if not self.getConfigVar('5gms_as', 'geo_ranges_file', ''):

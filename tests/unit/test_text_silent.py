@@ -171,6 +171,18 @@ class M3Reading(unittest.TestCase):
         self.assertFalse(self.ctx.haveContentHostingConfiguration('upstream'))
         self.assertTrue(self.ctx.haveContentHostingConfiguration('downstream'))
 
+    def test_a_geofencing_locator_type_that_the_as_cannot_evaluate_is_refused(self):
+        # implementation choice, text silent, see AS audit O-16: the tracking area code needs the tracking area of the UE (known to the core only), so
+        # the configuration is refused and not kept with a fence that would let every UE in
+        chc = self.chc('http://as.example.net/m4d/a/', 'http://origin.example.net/media/').model_dump(by_alias=True, exclude_none=True, mode='json')
+        for locator_type, locators in (('urn:3gpp:media-delivery:locator-type:trackingAreaCode', ['tac-lb00.tac-hb00.tac.epc.mnc001.mcc001.3gppnetwork.org']),
+                                       ('urn:example:vendor-locator', ['x'])):
+            with self.subTest(locator_type=locator_type):
+                chc['distributionConfigurations'][0]['geoFencing'] = {'locatorType': locator_type, 'locators': locators}
+                with self.assertRaises(Context.ValueError):
+                    self.ctx.addContentHostingConfiguration('c1', CHC.model_validate(chc))
+                self.assertFalse(self.ctx.haveContentHostingConfiguration('c1'))
+
     def test_a_created_configuration_is_active_until_the_af_deactivates_it(self):
         # implementation choice, text silent (4.5.4.7 does not give the state of a created resource), see AS audit O-8: active, as a 5GMSd AF that never
         # calls the (de)activation expects the content to be served
