@@ -105,7 +105,11 @@ local function load_ranges(path)
         return list
     end
     for line in f:lines() do
-        local cidr, country = line:match("^%s*([%x%.:]+/%d+)%s*[, ]%s*(%a%a)%s*$")
+        -- the zone is an ISO 3166-1 alpha-2 country code or an ISO 3166-2 code (country code, hyphen, subdivision code of up to three characters)
+        local cidr, country = line:match("^%s*([%x%.:]+/%d+)%s*[, ]%s*(%a%a%-%w%w?%w?)%s*$")
+        if not cidr then
+            cidr, country = line:match("^%s*([%x%.:]+/%d+)%s*[, ]%s*(%a%a)%s*$")
+        end
         if cidr then
             local addr, bits = cidr:match("^(.*)/(%d+)$")
             local bin = parse_address(addr)
@@ -148,12 +152,15 @@ function m4daccess.country_of(address, path)
     return best
 end
 
--- The zone of a UE is the country that the address ranges give for its address, so only a locator that is that ISO 3166-1 alpha-2
--- country code can be met. A locator that is an ISO 3166-2 code names a subdivision of a country: the UE is not known to be inside
--- it (it may be elsewhere in the country), so the locator does not give access.
-function m4daccess.zone_allowed(locators, country)
+-- The zone of a UE is what the address ranges give for its address: an ISO 3166-1 alpha-2 country code or an ISO 3166-2 code (TS 26.510 V19.2.0
+-- table B.1-1). A locator gives access when it is that zone, or the country that contains a zone that is a subdivision. A locator that is a
+-- subdivision does not give access to a UE whose zone is only known to be the country: the UE may be elsewhere in the country.
+function m4daccess.zone_allowed(locators, zone)
+    zone = zone:upper()
+    local country = zone:match("^(%a%a)")
     for _, loc in ipairs(locators) do
-        if loc:upper() == country then
+        loc = loc:upper()
+        if loc == zone or loc == country then
             return true
         end
     end

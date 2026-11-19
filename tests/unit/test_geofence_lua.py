@@ -28,8 +28,8 @@ class Geofencing(unittest.TestCase):
         with open(self.ranges, 'w') as f:
             f.write('192.0.2.0/24,US\n198.51.100.0/24,NL\n')
 
-    def allowed(self, locators, address):
-        script = SCRIPT % (PROXIES, ','.join('"%s"' % x for x in locators), self.ranges, address)
+    def allowed(self, locators, address, ranges=None):
+        script = SCRIPT % (PROXIES, ','.join('"%s"' % x for x in locators), ranges or self.ranges, address)
         out = subprocess.run([RESTY, '-e', script], capture_output=True, text=True, timeout=60, cwd=self.dir)
         self.assertEqual(out.returncode, 0, out.stderr)
         return out.stdout.strip() == 'true'
@@ -42,6 +42,22 @@ class Geofencing(unittest.TestCase):
     def test_a_subdivision_locator_does_not_widen_access_to_the_whole_country(self):
         self.assertFalse(self.allowed(['US-CA'], '192.0.2.7'))
         self.assertTrue(self.allowed(['US-CA', 'US'], '192.0.2.7'))
+
+    def test_a_subdivision_locator_gives_access_to_a_ue_in_that_subdivision(self):
+        # TS 26.510 V19.2.0 table B.1-1: an ISO 3166-2 code is a valid locator; the ranges file can name the subdivision of a range
+        ranges = os.path.join(self.dir, 'subdivisions.csv')
+        with open(ranges, 'w') as f:
+            f.write('192.0.2.0/24,US\n192.0.2.0/25,US-CA\n198.51.100.0/24,gb-eng\n')
+        self.assertTrue(self.allowed(['US-CA'], '192.0.2.7', ranges))
+        self.assertTrue(self.allowed(['us-ca'], '192.0.2.7', ranges))
+        # the country contains the subdivision
+        self.assertTrue(self.allowed(['US'], '192.0.2.7', ranges))
+        self.assertFalse(self.allowed(['US-NY'], '192.0.2.7', ranges))
+        self.assertFalse(self.allowed(['NL'], '192.0.2.7', ranges))
+        # outside the subdivision the zone is the country
+        self.assertFalse(self.allowed(['US-CA'], '192.0.2.200', ranges))
+        self.assertTrue(self.allowed(['GB'], '198.51.100.9', ranges))
+        self.assertTrue(self.allowed(['GB-ENG'], '198.51.100.9', ranges))
 
     def test_an_address_of_an_unknown_zone_is_refused(self):
         self.assertFalse(self.allowed(['US'], '203.0.113.9'))
