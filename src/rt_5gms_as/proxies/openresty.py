@@ -288,7 +288,7 @@ class OpenRestyLocationConfig(object):
 {prefix}    -- ngx.log(ngx.DEBUG,"rewrite_by_lua_block: uri = ", uri)
 {origin_prefix}{prefix}    ngx.var.downstream_prefix_url,ngx.ctx.uri = dynredir.mapUrl("{self.path_prefix}", ngx.var.downstream_prefix_url, uri){map_query}
 {prefix}    ngx.req.set_uri(uri)
-{prefix}    ngx.var.downstream_prefix_url = ngx.var.downstream_prefix_url..ngx.ctx.uri:sub(2)
+{prefix}    ngx.var.downstream_prefix_url = ngx.var.downstream_prefix_url..dynredir.escape_path(ngx.ctx.uri:sub(2))
 {prefix}    -- ngx.log(ngx.DEBUG,"rewrite_by_lua_block: proxy=", ngx.var.downstream_prefix_url,", uri=",uri)
 
 {prefix}    -- Execute CMCD handler per request 

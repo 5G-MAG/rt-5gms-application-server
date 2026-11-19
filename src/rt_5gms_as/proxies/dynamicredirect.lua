@@ -69,6 +69,12 @@ local function dynamicredirect_mapUrl(provisioning_session_prefix, default_proxy
 end
 dynamicredirect.mapUrl = dynamicredirect_mapUrl
 
+-- The URL path of a request as the origin takes it (RFC 3986 clause 3.3: the characters of a segment other than unreserved ones, sub-delimiters, ":" and
+-- "@" are percent-encoded). The path of the request is decoded by the proxy: a "?" or "#" in it would else end the path of the origin URL.
+function dynamicredirect.escape_path(path)
+    return (path:gsub("[^A-Za-z0-9%-._~!$&'()*+,;=:@/]", function(c) return string.format("%%%02X", c:byte()) end))
+end
+
 return dynamicredirect
 
 -- vim:ts=8:sts=4:sw=4:expandtab:

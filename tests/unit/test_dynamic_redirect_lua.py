@@ -13,7 +13,7 @@ from rt_5gms_as.context import Context
 from rt_5gms_as.openapi_5g.models.application_server_content_hosting_configuration import ApplicationServerContentHostingConfiguration as CHC
 from rt_5gms_as.proxies.openresty import OpenRestyWebProxy
 
-from tests.unit.test_ingest_base_query import CONFIG, OPENRESTY, chc_dict
+from tests.unit.test_ingest_base_query import CONFIG, OPENRESTY, chc_dict, location_config
 
 RESTY = shutil.which('resty') or ('/usr/local/openresty/bin/resty' if os.path.exists('/usr/local/openresty/bin/resty') else None)
 PROXIES = os.path.join(os.path.dirname(os.path.abspath(rt_5gms_as.__file__)), 'proxies')
@@ -59,6 +59,21 @@ print(ngx.shared.dynredirmap:get(second))
     def test_an_endpoint_is_reused_for_the_same_target(self):
         out = run_lua('print(tostring(d.get("/m4d/ps/", "http://a.example/x/") == d.get("/m4d/ps/", "http://a.example/x/")))')
         self.assertEqual(out, ['true'])
+
+
+@unittest.skipIf(RESTY is None, 'the resty command of OpenResty is not available')
+class OriginPath(unittest.TestCase):
+    def test_the_decoded_path_of_the_request_is_percent_encoded_for_the_origin(self):
+        # a decoded "?" would else start the query, a "#" a fragment, and a space or a "%" would make the URL of the origin invalid
+        out = run_lua('print(d.escape_path("a b/é?x#y%z.m4s"))')
+        self.assertEqual(out, ['a%20b/%C3%A9%3Fx%23y%25z.m4s'])
+
+    def test_unreserved_characters_and_sub_delimiters_are_kept(self):
+        path = "seg-1_a.b~c/d:e@f!$&'()*+,;=/seg.m4s"
+        self.assertEqual(run_lua('print(d.escape_path("%s"))' % path), [path])
+
+    def test_the_location_encodes_the_path_that_follows_the_service_location(self):
+        self.assertIn('ngx.var.downstream_prefix_url..dynredir.escape_path(ngx.ctx.uri:sub(2))', location_config('http://origin.example.com/p/'))
 
 
 @unittest.skipUnless(HAVE_NGINX, 'no openresty binary')
