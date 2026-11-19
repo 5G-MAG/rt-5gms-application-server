@@ -11,6 +11,7 @@ import tempfile
 import time
 import types
 import unittest
+from unittest import mock
 
 from rt_5gms_as.app import M3_PATH_PREFIX
 from rt_5gms_as.context import Context
@@ -175,13 +176,21 @@ class M3Reading(unittest.TestCase):
         # implementation choice, text silent, see AS audit O-16: the tracking area code needs the tracking area of the UE (known to the core only), so
         # the configuration is refused and not kept with a fence that would let every UE in
         chc = self.chc('http://as.example.net/m4d/a/', 'http://origin.example.net/media/').model_dump(by_alias=True, exclude_none=True, mode='json')
-        for locator_type, locators in (('urn:3gpp:media-delivery:locator-type:trackingAreaCode', ['tac-lb00.tac-hb00.tac.epc.mnc001.mcc001.3gppnetwork.org']),
-                                       ('urn:example:vendor-locator', ['x'])):
-            with self.subTest(locator_type=locator_type):
-                chc['distributionConfigurations'][0]['geoFencing'] = {'locatorType': locator_type, 'locators': locators}
-                with self.assertRaises(Context.ValueError):
-                    self.ctx.addContentHostingConfiguration('c1', CHC.model_validate(chc))
-                self.assertFalse(self.ctx.haveContentHostingConfiguration('c1'))
+        original = self.ctx.getConfigVar
+        # the file of address ranges is configured, so that only the locator type can be the reason of the refusal
+        with mock.patch.object(self.ctx, 'getConfigVar', side_effect=lambda section, name, default=None:
+                               '/ranges.csv' if name == 'geo_ranges_file' else original(section, name, default)):
+            for locator_type, locators in (('urn:3gpp:media-delivery:locator-type:trackingAreaCode', ['tac-lb00.tac-hb00.tac.epc.mnc001.mcc001.3gppnetwork.org']),
+                                           ('urn:example:vendor-locator', ['x'])):
+                with self.subTest(locator_type=locator_type):
+                    chc['distributionConfigurations'][0]['geoFencing'] = {'locatorType': locator_type, 'locators': locators}
+                    with self.assertRaises(Context.ValueError):
+                        self.ctx.addContentHostingConfiguration('c1', CHC.model_validate(chc))
+                    self.assertFalse(self.ctx.haveContentHostingConfiguration('c1'))
+            # the supported type is not refused for its type
+            chc['distributionConfigurations'][0]['geoFencing'] = {'locatorType': 'urn:3gpp:media-delivery:locator-type:iso3166', 'locators': ['NL']}
+            self.ctx.addContentHostingConfiguration('c1', CHC.model_validate(chc))
+            self.assertTrue(self.ctx.haveContentHostingConfiguration('c1'))
 
     def test_a_created_configuration_is_active_until_the_af_deactivates_it(self):
         # implementation choice, text silent (4.5.4.7 does not give the state of a created resource), see AS audit O-8: active, as a 5GMSd AF that never
