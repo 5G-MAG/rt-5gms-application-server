@@ -159,7 +159,7 @@ class RedirectConfiguration(unittest.TestCase):
                 text = fh.read()
             self.assertIn('ngx.ctx.redirected = dynredir.mapUrl(', text)
             self.assertIn('ngx.var.downstream_prefix_url = ngx.var.downstream_prefix_url..dynredir.suffix(query)', text)
-            self.assertIn('dynredir.split_location(ngx.var.upstream_http_location, ngx.var.downstream_prefix_url)', text)
+            self.assertIn('dynredir.split_location(location, ngx.var.downstream_prefix_url)', text)
             run = subprocess.run([OPENRESTY, '-t', '-c', os.path.join(d, 'nginx.conf'), '-p', d + '/'], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
             self.assertEqual(run.returncode, 0, run.stdout)
 
