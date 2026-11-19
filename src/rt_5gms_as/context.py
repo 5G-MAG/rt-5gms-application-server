@@ -40,6 +40,10 @@ from .utils import encode_resource_id, decode_resource_id
 
 from .openapi_5g.models.application_server_content_hosting_configuration import ApplicationServerContentHostingConfiguration as ContentHostingConfiguration
 
+# TS 26.512 V19.3.0 table 8.1-1: the content ingest protocols that this AS realises (clauses 8.2 and 8.4)
+INGEST_PULL_PROTOCOLS = ('urn:3gpp:5gms:content-protocol:http-pull', 'urn:3gpp:5gms:content-protocol:http-pull-ingest')
+INGEST_LOW_LATENCY_PULL_PROTOCOL = 'urn:3gpp:5gms:content-protocol:http-ll-pull'
+
 def wrapped_default(self, obj):
     return getattr(obj.__class__, "__jsontype__", getattr(obj.__class__, "__str__", wrapped_default.default))(obj)
 wrapped_default.default = json.JSONEncoder().default
@@ -459,9 +463,9 @@ class Context(object):
             raise Context.ValueError('ContentHostingConfiguration must have an ingestConfiguration', 'ingestConfiguration')
         if chc.distribution_configurations is None or not hasattr(chc.distribution_configurations, '__iter__'):
             raise Context.ValueError('ContentHostingConfiguration must have a distributionConfigurations array', 'distributionConfigurations')
-        # What the web proxy can realise: pull ingest over HTTP (TS 26.512 table in clause 6.x lists both URNs, the second one is deprecated)
-        if chc.ingest_configuration.mode != 'PULL' or chc.ingest_configuration.protocol not in ('urn:3gpp:5gms:content-protocol:http-pull', 'urn:3gpp:5gms:content-protocol:http-pull-ingest'):
-            raise Context.ConfigError('This 5GMS AS can only ingest content by HTTP pull (mode PULL, protocol urn:3gpp:5gms:content-protocol:http-pull)')
+        # What the web proxy can realise: pull ingest over HTTP, also the low-latency one (TS 26.512 table 8.1-1; the second URN of the first is deprecated)
+        if chc.ingest_configuration.mode != 'PULL' or chc.ingest_configuration.protocol not in INGEST_PULL_PROTOCOLS + (INGEST_LOW_LATENCY_PULL_PROTOCOL,):
+            raise Context.ConfigError('This 5GMS AS can only ingest content by HTTP pull (mode PULL, protocol urn:3gpp:5gms:content-protocol:http-pull or http-ll-pull)')
         # The values below end up in the web proxy configuration: only what cannot change its structure is accepted
         self.__checkProxySafeValues(chc)
         # TS 26.512 clause 4.5.4.3: an invalid reference to another resource fails the operation with 400

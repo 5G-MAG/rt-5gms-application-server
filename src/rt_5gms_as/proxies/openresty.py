@@ -43,14 +43,14 @@ from urllib.parse import urlparse
 
 from ..proxy_factory import WebProxyInterface, add_web_proxy
 from ..utils import find_executable_on_path, traverse_directory_tree, encode_resource_id, decode_resource_id
-from ..context import Context
+from ..context import Context, INGEST_PULL_PROTOCOLS, INGEST_LOW_LATENCY_PULL_PROTOCOL
 from .. import m3d
 
 class OpenRestyLocationConfig(object):
     '''
     Class to hold and compare location configurations
     '''
-    def __init__(self, context: Context, path_prefix: str, downstream_prefix_url: str, provisioning_session: str, downstream_query: str = ''):
+    def __init__(self, context: Context, path_prefix: str, downstream_prefix_url: str, provisioning_session: str, downstream_query: str = '', low_latency: bool = False):
         self.__context: Context = context
         if not Context.isProxySafeQuery(downstream_query):
             raise ValueError('The query of the ingest baseURL cannot be written into the web proxy configuration')
@@ -60,6 +60,8 @@ class OpenRestyLocationConfig(object):
         self.path_prefix: str = path_prefix
         self.downstream_prefix_url: str = downstream_prefix_url
         self.provisioning_session: str = provisioning_session
+        # TS 26.512 V19.3.0 clauses 8.4 and 10.3: the ingest protocol is the low-latency one, so partially received segments are passed on at once
+        self.low_latency: bool = low_latency
         # any string can be a ResourceId (TS 26.512 V19.3.0 clause 6.4.2): the configuration file has it encoded
         self.__session_token: str = encode_resource_id(provisioning_session)
         self.rewrite_rules: List[Tuple[str,str]] = []
@@ -123,7 +125,7 @@ class OpenRestyLocationConfig(object):
     def __eq__(self, other: "OpenRestyLocationConfig") -> bool:
         if self.path_prefix != other.path_prefix:
             return False
-        if self.provisioning_session != other.provisioning_session:
+        if self.provisioning_session != other.provisioning_session or self.low_latency != other.low_latency:
             return False
         if self.downstream_prefix_url != other.downstream_prefix_url or self.downstream_query != other.downstream_query:
             return False
@@ -232,6 +234,11 @@ class OpenRestyLocationConfig(object):
             # a cookie of the origin is not forwarded (clause 7.6.4.2) and does not keep the resource out of the cache
             ret += f'{prefix}  proxy_ignore_headers Set-Cookie;\n'
         ret += self.__cache_directives(prefix, rule)
+        if self.low_latency:
+            # clauses 8.4 and 10.3: a segment that is only partly received (a chunk of HTTP/1.1 chunked transfer coding) is available to the Media Player at
+            # once, so nothing is buffered or held back for the cache; a byte range request, also the one that ends at 9007199254740991 (RFC 8673) and is
+            # answered with 206 without Content-Length, goes to the origin
+            ret += f'{prefix}  proxy_http_version 1.1;\n{prefix}  proxy_set_header Connection "";\n{prefix}  proxy_buffering off;\n{prefix}  proxy_cache off;\n'
         # CMCD data is for the collector of the AS and not for the origin (M2d): its request headers are not passed on
         for hdr in ('CMCD', 'CMCD-Request', 'CMCD-Object', 'CMCD-Status', 'CMCD-Session'):
             ret += f'{prefix}  proxy_set_header {hdr} "";\n'
@@ -634,7 +641,7 @@ class OpenRestyWebProxy(WebProxyInterface):
                 # a deactivated Content Hosting Configuration stays configured but is not served at M4 (TS 26.512 clause 4.5.4.7)
                 continue
             i = self._context.findContentHostingConfigurationByProvisioningSession(provisioning_session_id)
-            if i.ingest_configuration.mode != 'PULL' or i.ingest_configuration.protocol not in ('urn:3gpp:5gms:content-protocol:http-pull', 'urn:3gpp:5gms:content-protocol:http-pull-ingest'):
+            if i.ingest_configuration.mode != 'PULL' or i.ingest_configuration.protocol not in INGEST_PULL_PROTOCOLS + (INGEST_LOW_LATENCY_PULL_PROTOCOL,):
                 self.log.error("Can only handle http-pull sources at present")
                 return False
             downstream_origin = i.ingest_configuration.base_url
@@ -664,7 +671,8 @@ class OpenRestyWebProxy(WebProxyInterface):
                     m4d_path_prefix = '/' + m4d_path_prefix
                 if m4d_path_prefix[-1] != '/':
                     m4d_path_prefix += '/'
-                locn = OpenRestyLocationConfig(self._context, m4d_path_prefix, downstream_origin, provisioning_session_id, downstream_query)
+                locn = OpenRestyLocationConfig(self._context, m4d_path_prefix, downstream_origin, provisioning_session_id, downstream_query,
+                                               i.ingest_configuration.protocol == INGEST_LOW_LATENCY_PULL_PROTOCOL)
                 if dc.path_rewrite_rules is not None:
                     for rr in dc.path_rewrite_rules:
                         if not locn.addRewriteRule(rr.request_path_pattern, rr.mapped_path):
