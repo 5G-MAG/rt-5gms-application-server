@@ -41,6 +41,17 @@ class PurgeUsingRegex(unittest.TestCase):
             with self.subTest(pattern=pattern):
                 self.assertEqual(asyncio.run(Proxy('1.0', entries).purgeUsingRegex('s1', pattern)), count)
 
+    def test_pattern_finds_a_resource_with_a_query_by_its_path_or_by_the_whole_url(self):
+        # the cache key holds the query of the request (TS 26.512 V19.3.0 clause 10.1)
+        entries = [('s1', '/m4d/ps/seg1.m4s?v=1'), ('s1', '/m4d/ps/seg2.m4s'), ('s1', '/m4d/ps/seg3.m4s?v=2')]
+        for pattern, count in ((r'\.m4s$', 3), (r'seg1\.m4s\?v=1$', 1), (r'\?v=', 2), ('^/m4d/ps/seg2', 1)):
+            with self.subTest(pattern=pattern):
+                self.assertEqual(asyncio.run(Proxy('1.0', entries).purgeUsingRegex('s1', pattern)), count)
+
+    def test_purging_a_path_waits_for_the_purge(self):
+        proxy = Proxy('1.0', [('s1', '/a/seg1.m4s'), ('s1', '/b/seg1.m4s')])
+        self.assertEqual(asyncio.run(proxy.purgePath('s1', '/a/seg1.m4s')), 1)
+
     def test_pattern_that_takes_too_long_is_refused(self):
         # a bound with a source: the option purge_regex_timeout of the section 5gms_as
         proxy = Proxy('0.3', [('s1', 'a' * 60 + 'b')])

@@ -297,7 +297,8 @@ class WebProxyInterface(object):
             if psid != provisioningSessionId:
                 return False
             try:
-                return comp_regex.search(path, timeout=timeout) is not None
+                # the URL of a transport resource has its query (clause 10.1): a pattern that ends at the path (\.m4s$) finds it too
+                return any(comp_regex.search(text, timeout=timeout) is not None for text in ((path.split('?', 1)[0], path) if '?' in path else (path,)))
             except TimeoutError:
                 raise WebProxyRegexTimeout('The regular expression took longer than %s s on one cache entry' % timeout)
         return await self._purge(key_filter=matches)
@@ -316,7 +317,7 @@ class WebProxyInterface(object):
         Returns the number of items purged.
         '''
         self._context.appLog().debug('Purging %s in %s...', purge_path, provisioningSessionId)
-        return self._purge(key_filter=lambda psid,path: psid==provisioningSessionId and path==purge_path)
+        return await self._purge(key_filter=lambda psid,path: psid==provisioningSessionId and path==purge_path)
 
     #### Protected methods ####
 
