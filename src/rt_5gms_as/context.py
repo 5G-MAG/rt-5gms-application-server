@@ -666,7 +666,11 @@ class Context(object):
                 existing_cert = cert_in.read()
             if existing_cert == cert_contents:
                 return False
-        with open(cache_filename, 'w', newline='') as cert_out:
+        # the bundle holds the private key (TS 26.512 V19.3.0 clause 4.5.2.3; TS 26.510 V19.2.0 clause 5.2.4.1: the private key is not to be revealed):
+        # only the owner can read the file, whatever the umask is (the web proxy reads it as the same user)
+        fd = os.open(cache_filename, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, 'w', newline='') as cert_out:
             cert_out.write(cert_contents)
         self.__certificates[cert_id] = cache_filename
         return True

@@ -75,5 +75,25 @@ class DestroyedIdentifiers(unittest.TestCase):
         with self.assertRaises(Context.ConfigError):
             Context(self.config)
 
+class CertificateFile(unittest.TestCase):
+    def test_the_bundle_with_the_private_key_can_be_read_by_its_owner_only(self):
+        # TS 26.512 V19.3.0 clause 4.5.2.3: the bundle includes the private key; the file is private whatever the umask or an earlier mode was
+        with tempfile.TemporaryDirectory() as d:
+            config = os.path.join(d, 'as.conf')
+            with open(config, 'w') as fh:
+                fh.write(CONFIG.format(d=d))
+            ctx = new_context(config)
+            old_umask = os.umask(0o002)
+            try:
+                ctx.addCertificate('cert-1', 'bundle')
+                name = ctx.getCertificateFilename('cert-1')
+                self.assertEqual(os.stat(name).st_mode & 0o777, 0o600)
+                os.chmod(name, 0o664)
+                self.assertTrue(ctx.updateCertificate('cert-1', 'other bundle'))
+                self.assertEqual(os.stat(name).st_mode & 0o777, 0o600)
+            finally:
+                os.umask(old_umask)
+
+
 if __name__ == '__main__':
     unittest.main()
