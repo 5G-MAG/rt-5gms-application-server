@@ -632,8 +632,16 @@ class OpenRestyServerConfig(object):
         ret += f'''{prefix}  location @handle_redirect {{
 {prefix}    rewrite_by_lua_block {{
 {prefix}      -- ngx.log(ngx.DEBUG,"rewrite_by_lua_block(",ngx.var.upstream_http_location,",",ngx.var.location_prefix,",",ngx.var.upstream_status,")")
+{prefix}      -- implementation choice, text silent, see AS audit O-5 (no CR: behaviour of one implementation): a 3xx answer of the origin without a Location
+{prefix}      -- names no target (clause 8.2 maps the target of the redirect), so the AS answers 502 (RFC 9110 clause 15.6.3, invalid response from the inbound
+{prefix}      -- server) and does not drop the connection
+{prefix}      local location = ngx.var.upstream_http_location
+{prefix}      if not location or location == "" then
+{prefix}        ngx.log(ngx.ERR, "the origin answered ", ngx.var.upstream_status, " for ", ngx.var.downstream_prefix_url, " without a Location")
+{prefix}        return ngx.exit(502)
+{prefix}      end
 {prefix}      -- the Location may be a relative reference: it is resolved against the URL that was requested from the origin
-{prefix}      local origin_redir_prefix, redir_object = dynredir.split_location(ngx.var.upstream_http_location, ngx.var.downstream_prefix_url)
+{prefix}      local origin_redir_prefix, redir_object = dynredir.split_location(location, ngx.var.downstream_prefix_url)
 {prefix}      ngx.ctx.origin_redir_prefix = origin_redir_prefix
 {prefix}      -- ngx.log(ngx.DEBUG, "ngx.ctx.origin_redir_prefix = '",ngx.ctx.origin_redir_prefix,"', redir_object = '",redir_object,"'")
 {prefix}      ngx.ctx.m4_redir_prefix = dynredir.get(ngx.var.location_prefix, ngx.ctx.origin_redir_prefix)
@@ -641,7 +649,7 @@ class OpenRestyServerConfig(object):
 {prefix}    }}
 {prefix}    body_filter_by_lua_block {{
 {prefix}      -- ngx.log(ngx.DEBUG, "body_filter_by_lua_block(",ngx.ctx.origin_redir_prefix,",",ngx.ctx.m4_redir_prefix,")")
-{prefix}      if (ngx.arg[1]) then
+{prefix}      if (ngx.arg[1] and ngx.ctx.origin_redir_prefix) then
 {prefix}        ngx.arg[1] = ngx.re.sub(ngx.arg[1], re_escape(ngx.ctx.origin_redir_prefix), ngx.ctx.m4_redir_prefix)
 {prefix}      end
 {prefix}    }}

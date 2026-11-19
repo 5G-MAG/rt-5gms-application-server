@@ -19,6 +19,8 @@ class QueryToTheOrigin(unittest.TestCase):
         self.origin = Origin()
         self.origin.routes = {'/media/seg.m4s': self.origin.answer(200, {'Content-Type': 'video/mp4'}, b'segment'),
                               '/media/redir': self.origin.answer(302, {'Location': 'http://127.0.0.1:%d/other/b.m4s?sig=abc' % self.origin.port}),
+                              '/media/noloc': self.origin.answer(302, {}, b'moved'),
+                              '/media/emptyloc': self.origin.answer(301, {'Location': ''}, b'moved'),
                               '/other/b.m4s': lambda h: self.origin.answer(200 if 'sig=abc' in h.path else 403, {}, b'ok')(h)}
         self.proxy = None
 
@@ -85,6 +87,18 @@ class QueryToTheOrigin(unittest.TestCase):
         self.assertTrue(headers['location'].endswith('/b.m4s?sig=abc'))
         self.assertEqual(self.proxy.get(HOST, headers['location'])[0], 200)
         self.assertEqual(self.paths()[-1], '/other/b.m4s?sig=abc')
+
+    def test_a_redirect_of_the_origin_without_a_location_is_a_bad_gateway(self):
+        # implementation choice, text silent (clause 8.2 maps the target of a redirect, a 3xx without Location has none), see AS audit O-5:
+        # 502 and not a dropped connection
+        self.start()
+        for path in ('/m4d/ps1/noloc', '/m4d/ps1/emptyloc'):
+            status, headers, body = self.proxy.get(HOST, path)
+            self.assertEqual(status, 502, path)
+            self.assertNotIn('location', headers)
+            self.assertNotIn(b'moved', body)
+        # a redirect with a Location is still mapped
+        self.assertEqual(self.proxy.get(HOST, '/m4d/ps1/redir')[0], 302)
 
 
 if __name__ == '__main__':
