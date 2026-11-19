@@ -7,6 +7,7 @@ import http.server
 import logging
 import os
 import socket
+import shutil
 import socketserver
 import subprocess
 import tempfile
@@ -139,6 +140,7 @@ class Proxy(object):
         except subprocess.TimeoutExpired:
             self.process.kill()
         self.process.stdout.close()
+        shutil.rmtree(self.dir, ignore_errors=True)
 
 
 def chc_dict(origin_port, host='as.example.net', prefix='/m4d/ps1/', origin_path='/media/', protocol='urn:3gpp:5gms:content-protocol:http-pull', dist=None, ingest=None):
