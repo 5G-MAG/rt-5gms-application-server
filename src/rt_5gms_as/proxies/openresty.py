@@ -655,6 +655,9 @@ class OpenRestyWebProxy(WebProxyInterface):
             if downstream_origin[-1] == '/':
                 downstream_origin = downstream_origin[:-1]
             for dc in i.distribution_configurations:
+                # TS 26.510 V19.2.0 table 8.8.3.3-1: content distributed exclusively via a supplementary network is not available at M4
+                if any(n.distribution_mode == 'MODE_EXCLUSIVE' for n in dc.supplementary_distribution_networks or []):
+                    continue
                 certificate_filename = None
                 if dc.certificate_id is not None:
                     certificate_filename = self._context.getCertificateFilename(dc.certificate_id)
